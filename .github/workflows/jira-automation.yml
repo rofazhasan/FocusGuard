@@ -45,8 +45,13 @@ jobs:
         with:
           string: ${{ github.event.head_commit.message }}
 
+      - name: Diagnostic Log
+        run: |
+          echo "Jira Login Outcome: ${{ steps.jira_login.outcome }}"
+          echo "Detected Issue Key: ${{ steps.find_issue.outputs.issue }}"
+
       - name: Post Verification Comment on Jira Issue
-        if: steps.jira_login.outcome == 'success' && steps.find_issue.outputs.issue != ''
+        if: steps.find_issue.outputs.issue != ''
         uses: atlassian/gajira-comment@v3
         continue-on-error: true
         with:
@@ -55,10 +60,18 @@ jobs:
             ✅ Automated CI verification passed on GitHub!
             - Commit: ${{ github.sha }}
             - Branch: ${{ github.ref_name }}
-            - Status: Automated tests verified. Moving ticket to DONE.
+            - Status: Automated tests verified. Moving ticket to Done.
 
-      - name: Auto-Transition Jira Issue to DONE
-        if: steps.jira_login.outcome == 'success' && steps.find_issue.outputs.issue != ''
+      - name: Auto-Transition Jira Issue to Done
+        if: steps.find_issue.outputs.issue != ''
+        uses: atlassian/gajira-transition@v3
+        continue-on-error: true
+        with:
+          issue: ${{ steps.find_issue.outputs.issue }}
+          transition: "Done"
+
+      - name: Fallback Auto-Transition to DONE
+        if: steps.find_issue.outputs.issue != ''
         uses: atlassian/gajira-transition@v3
         continue-on-error: true
         with:
