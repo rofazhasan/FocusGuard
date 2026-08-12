@@ -18,7 +18,11 @@ type Config struct {
 	SSLMode  string
 }
 
-func Connect(cfg Config) (*sql.DB, error) {
+func Connect(cfg *Config) (*sql.DB, error) {
+	if cfg == nil || cfg.Host == "" {
+		return nil, fmt.Errorf("no valid database configuration provided")
+	}
+
 	if cfg.SSLMode == "" {
 		cfg.SSLMode = "disable"
 	}

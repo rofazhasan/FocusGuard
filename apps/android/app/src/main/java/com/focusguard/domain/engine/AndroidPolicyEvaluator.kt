@@ -8,7 +8,7 @@ object AndroidPolicyEvaluator {
      * Validates monotonic uptime to prevent user wall-clock tampering.
      */
     fun validateMonotonicClock(lastWallTimeMs: Long, lastMonotonicUptimeMs: Long): Boolean {
-        let currentMonotonicMs = SystemClock.elapsedRealtime()
+        val currentMonotonicMs = SystemClock.elapsedRealtime()
         val elapsedWallSec = (System.currentTimeMillis() - lastWallTimeMs) / 1000.0
         val elapsedMonotonicSec = (currentMonotonicMs - lastMonotonicUptimeMs) / 1000.0
 

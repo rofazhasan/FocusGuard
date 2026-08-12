@@ -12,6 +12,7 @@ import (
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"github.com/focusguard/focusguard/backend/internal/analytics"
 	"github.com/focusguard/focusguard/backend/internal/auth"
 	"github.com/focusguard/focusguard/backend/internal/devices"
 	"github.com/focusguard/focusguard/backend/internal/events"
@@ -68,6 +69,8 @@ func main() {
 
 	go wsHub.Run()
 
+	analyticsHandler := analytics.NewHandler(db)
+
 	authHandler := auth.NewHandler(db, tokenService)
 	devicesHandler := devices.NewHandler(db)
 	policiesHandler := policies.NewHandler(db)
@@ -111,6 +114,9 @@ func main() {
 		r.Delete("/api/v1/policies/{id}", policiesHandler.DeletePolicy)
 
 		r.Post("/api/v1/usage/sync", usageHandler.SyncUsage)
+
+		r.Get("/api/v1/analytics/daily", analyticsHandler.GetDailyAnalytics)
+		r.Get("/api/v1/analytics/weekly", analyticsHandler.GetWeeklyAnalytics)
 	})
 
 	server := &http.Server{
