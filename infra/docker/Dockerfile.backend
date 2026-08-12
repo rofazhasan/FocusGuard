@@ -1,0 +1,33 @@
+# Multi-stage Dockerfile for FocusGuard Go Backend
+
+# Stage 1: Build
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apk add --no-cache git gcc musl-dev
+
+# Copy dependency files
+COPY backend/go.mod backend/go.sum* ./
+
+RUN go mod download
+
+# Copy source code
+COPY backend/ ./
+
+# Build optimized binary
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o focusguard-server ./cmd/server
+
+# Stage 2: Runtime
+FROM alpine:3.19
+
+WORKDIR /app
+
+RUN apk add --no-cache ca-certificates tzdata
+
+COPY --from=builder /app/focusguard-server .
+
+EXPOSE 8080
+
+CMD ["./focusguard-server"]

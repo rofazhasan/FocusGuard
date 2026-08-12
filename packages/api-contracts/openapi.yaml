@@ -1,0 +1,271 @@
+openapi: 3.0.3
+info:
+  title: FocusGuard Platform API
+  description: API contract for FocusGuard cross-device attention enforcement system.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local Development Server
+
+paths:
+  /health:
+    get:
+      summary: Health check endpoint
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "UP"
+                  timestamp:
+                    type: string
+                    example: "2026-08-12T22:40:00Z"
+                  version:
+                    type: string
+                    example: "1.0.0"
+
+  /auth/register:
+    post:
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+
+  /auth/login:
+    post:
+      summary: Authenticate user credentials
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+
+  /devices/register:
+    post:
+      summary: Register a macOS or Android device
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterDeviceRequest'
+      responses:
+        '201':
+          description: Device registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Device'
+
+  /devices:
+    get:
+      summary: List user's registered devices
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Device'
+
+  /policies:
+    get:
+      summary: Get active policies
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of policies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Policy'
+    post:
+      summary: Create a new policy
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePolicyRequest'
+      responses:
+        '201':
+          description: Policy created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Policy'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    RegisterRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    AuthResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            email:
+              type: string
+
+    RegisterDeviceRequest:
+      type: object
+      required:
+        - deviceName
+        - platform
+        - osVersion
+      properties:
+        deviceName:
+          type: string
+        platform:
+          type: string
+          enum: [MACOS, ANDROID]
+        osVersion:
+          type: string
+
+    Device:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        deviceName:
+          type: string
+        platform:
+          type: string
+        osVersion:
+          type: string
+        status:
+          type: string
+        lastSeenAt:
+          type: string
+          format: date-time
+
+    CreatePolicyRequest:
+      type: object
+      required:
+        - name
+        - limitSeconds
+        - enforcementMode
+        - targets
+      properties:
+        name:
+          type: string
+        limitSeconds:
+          type: integer
+        period:
+          type: string
+          enum: [DAILY, WEEKLY]
+          default: DAILY
+        enforcementMode:
+          type: string
+          enum: [BLOCK, FOCUS_ONLY, SCHEDULED_BLOCK]
+        targets:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyTarget'
+
+    PolicyTarget:
+      type: object
+      required:
+        - targetType
+        - targetValue
+      properties:
+        targetType:
+          type: string
+          enum: [APP, WEBSITE, CATEGORY]
+        targetValue:
+          type: string
+
+    Policy:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        limitSeconds:
+          type: integer
+        period:
+          type: string
+        enforcementMode:
+          type: string
+        isEnabled:
+          type: boolean
+        version:
+          type: integer
+        targets:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyTarget'

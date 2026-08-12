@@ -1,0 +1,31 @@
+name: macOS Client CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'apps/macos/**'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'apps/macos/**'
+
+jobs:
+  build-macos:
+    name: Build macOS Application
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Select Xcode Version
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Build macOS Target
+        run: |
+          if [ -d "apps/macos/FocusGuard.xcodeproj" ]; then
+            xcodebuild build -project apps/macos/FocusGuard.xcodeproj -scheme FocusGuard -destination 'platform=macOS' CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
+          else
+            echo "Xcode project pending creation"
+          fi
