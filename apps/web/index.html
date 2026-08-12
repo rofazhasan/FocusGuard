@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FocusGuard — Your attention. Your rules.</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="app" class="app-container">
+    <!-- Top Navigation Bar -->
+    <header class="navbar">
+      <div class="brand">
+        <div class="logo-icon">🛡️</div>
+        <div class="brand-text">
+          <span class="brand-title">FOCUSGUARD</span>
+          <span class="brand-tagline">Your attention. Your rules.</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div class="status-badge status-protected" id="system-status">
+          <span class="status-dot"></span>
+          <span id="status-text">Protected Across 2 Devices</span>
+        </div>
+        <button class="btn btn-secondary" id="btn-blocker-demo">Preview Block Screen</button>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Section 1: Dashboard Header -->
+      <section class="dashboard-header">
+        <div>
+          <h1 class="page-title">Today's Attention</h1>
+          <p class="subtitle">Cross-device attention budgets and real-time policy enforcement.</p>
+        </div>
+        <button class="btn btn-primary" id="btn-new-policy">+ New Policy</button>
+      </section>
+
+      <!-- Section 2: Metric Overview Grid -->
+      <section class="metrics-grid">
+        <div class="card metric-card">
+          <div class="card-header">
+            <span class="card-label">Total Focus</span>
+            <span class="badge badge-blue">Today</span>
+          </div>
+          <div class="metric-value" id="metric-total-focus">2h 17m</div>
+          <div class="metric-subtext">↑ 14% more than yesterday</div>
+        </div>
+
+        <div class="card metric-card">
+          <div class="card-header">
+            <span class="card-label">Attention Budget</span>
+            <span class="badge badge-purple" id="budget-ratio-badge">71 / 90 min</span>
+          </div>
+          <div class="metric-value-container">
+            <span class="metric-value" id="metric-budget-used">71</span>
+            <span class="metric-unit">/ 90 min</span>
+          </div>
+          <div class="progress-bar-container">
+            <div class="progress-bar-fill" id="budget-progress-fill" style="width: 78.8%;"></div>
+          </div>
+        </div>
+
+        <div class="card metric-card">
+          <div class="card-header">
+            <span class="card-label">Active Focus Session</span>
+            <span class="badge badge-green" id="focus-status-badge">Ready</span>
+          </div>
+          <div class="metric-value" id="focus-timer-display">45:00</div>
+          <div class="metric-subtext" id="focus-timer-subtext">Click below to start instant lockout</div>
+        </div>
+      </section>
+
+      <!-- Section 3: Two-Column Top Apps & Enrolled Devices -->
+      <section class="two-col-grid">
+        <!-- Top Apps Card -->
+        <div class="card">
+          <div class="card-title-row">
+            <h2 class="card-title">Top Applications & Websites</h2>
+            <span class="text-muted text-small">Combined Usage</span>
+          </div>
+          <div class="app-list" id="app-list-container">
+            <!-- Dynamically Rendered App Items -->
+          </div>
+        </div>
+
+        <!-- Enrolled Devices Card -->
+        <div class="card">
+          <div class="card-title-row">
+            <h2 class="card-title">Enrolled Devices</h2>
+            <button class="btn-link" id="btn-add-device">+ Enroll Device</button>
+          </div>
+          <div class="device-list" id="device-list-container">
+            <!-- Dynamically Rendered Device Items -->
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 4: Focus Session Control Box -->
+      <section class="card focus-control-card">
+        <div class="focus-control-header">
+          <div>
+            <h2 class="card-title">Launch Focus Session</h2>
+            <p class="subtitle">Instantly restrict selected distracting apps and web domains across all devices.</p>
+          </div>
+          <div class="duration-selector" id="duration-selector">
+            <button class="duration-btn" data-mins="15">15m</button>
+            <button class="duration-btn" data-mins="30">30m</button>
+            <button class="duration-btn active" data-mins="45">45m</button>
+            <button class="duration-btn" data-mins="60">60m</button>
+          </div>
+        </div>
+
+        <div class="focus-targets-bar">
+          <div class="target-group">
+            <span class="group-label">🚫 Blocked Targets:</span>
+            <span class="tag tag-red">YouTube</span>
+            <span class="tag tag-red">Instagram</span>
+            <span class="tag tag-red">Reddit</span>
+            <span class="tag tag-red">Games</span>
+          </div>
+          <div class="target-group">
+            <span class="group-label">✅ Allowed Essentials:</span>
+            <span class="tag tag-green">Messages</span>
+            <span class="tag tag-green">University Apps</span>
+            <span class="tag tag-green">IDE & Terminal</span>
+          </div>
+        </div>
+
+        <div class="focus-action-row">
+          <button class="btn btn-focus" id="btn-toggle-focus">
+            <span class="focus-icon">⚡</span>
+            <span id="focus-btn-text">START FOCUS (45m)</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- Section 5: Cross-Device Usage Simulator -->
+      <section class="card simulator-card">
+        <div class="card-title-row">
+          <h2 class="card-title">Cross-Device Attention Simulator</h2>
+          <span class="badge badge-blue">Real-Time Sync Engine</span>
+        </div>
+        <p class="subtitle">Simulate real usage accrued on MacBook Pro and Android Phone to test shared limit trigger.</p>
+
+        <div class="sim-controls-grid">
+          <div class="sim-device-box">
+            <div class="sim-header">
+              <span>💻 MacBook Pro</span>
+              <span class="text-muted" id="sim-mac-youtube-text">YouTube: 17m</span>
+            </div>
+            <div class="btn-group">
+              <button class="btn btn-sm" id="btn-sim-mac-add">+ 5m YouTube (Mac)</button>
+            </div>
+          </div>
+
+          <div class="sim-device-box">
+            <div class="sim-header">
+              <span>📱 Android Phone</span>
+              <span class="text-muted" id="sim-android-youtube-text">YouTube: 11m</span>
+            </div>
+            <div class="btn-group">
+              <button class="btn btn-sm" id="btn-sim-android-add">+ 5m YouTube (Android)</button>
+            </div>
+          </div>
+
+          <div class="sim-total-box">
+            <div class="sim-header">
+              <span>☁️ Cloud Aggregated YouTube Usage</span>
+              <span class="text-bold" id="sim-cloud-total-text">28 / 30 min</span>
+            </div>
+            <div class="progress-bar-container">
+              <div class="progress-bar-fill fill-red" id="sim-progress-fill" style="width: 93.3%;"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Modal 1: Policy Editor Modal -->
+    <div class="modal-overlay" id="modal-policy" style="display: none;">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Create Attention Policy</h3>
+          <button class="btn-close" id="btn-close-policy-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Policy Name</label>
+            <input type="text" id="policy-name-input" class="form-control" value="YouTube Daily Limit">
+          </div>
+          <div class="form-group">
+            <label>Target Type</label>
+            <select id="policy-target-type" class="form-control">
+              <option value="APP">Application (Bundle / Package Name)</option>
+              <option value="WEBSITE" selected>Website Domain</option>
+              <option value="CATEGORY">Category</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Target Value</label>
+            <input type="text" id="policy-target-val" class="form-control" value="youtube.com">
+          </div>
+          <div class="form-row">
+            <div class="form-group half">
+              <label>Daily Budget (Minutes)</label>
+              <input type="number" id="policy-limit-input" class="form-control" value="30">
+            </div>
+            <div class="form-group half">
+              <label>Enforcement Mode</label>
+              <select id="policy-mode-input" class="form-control">
+                <option value="BLOCK">BLOCK (Hard Shield)</option>
+                <option value="FOCUS_ONLY">FOCUS_ONLY</option>
+                <option value="SCHEDULED_BLOCK">SCHEDULED_BLOCK</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btn-cancel-policy">Cancel</button>
+          <button class="btn btn-primary" id="btn-save-policy">Save & Apply Policy</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal 2: Premium Block Screen Overlay -->
+    <div class="modal-overlay blocker-overlay" id="modal-blocker" style="display: none;">
+      <div class="blocker-card">
+        <div class="blocker-brand">FOCUSGUARD</div>
+        <h1 class="blocker-title">Time's up.</h1>
+        <p class="blocker-message">You used today's <strong>YouTube</strong> attention budget.</p>
+        <div class="blocker-badge">30 / 30 min</div>
+        <div class="blocker-reset">Next reset: 12:00 AM</div>
+        <p class="blocker-footer-note">Enforced by local OS Screen Time & VpnService policy engine.</p>
+        <button class="btn btn-secondary" id="btn-close-blocker">Dismiss Preview</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
