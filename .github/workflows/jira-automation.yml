@@ -23,57 +23,73 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+          cache-dependency-path: 'backend/go.sum'
 
       - name: Verify Backend Automated Tests
         run: |
           cd backend
           go test ./...
 
-      - name: Login to Jira API
-        id: jira_login
-        uses: atlassian/gajira-login@v3
-        continue-on-error: true
+      - name: Extract Jira Issue Key & Auto-Transition via Jira REST API
         env:
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-
-      - name: Find Jira Issue Key from Commit Message
-        id: find_issue
-        uses: atlassian/gajira-find-issue-key@v3
-        continue-on-error: true
-        with:
-          string: ${{ github.event.head_commit.message }}
-
-      - name: Diagnostic Log
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          COMMIT_SHA: ${{ github.sha }}
+          BRANCH_NAME: ${{ github.ref_name }}
         run: |
-          echo "Jira Login Outcome: ${{ steps.jira_login.outcome }}"
-          echo "Detected Issue Key: ${{ steps.find_issue.outputs.issue }}"
+          # 1. Extract Jira Issue Key (e.g., FC-101, FC-1, FG-101) using regex
+          ISSUE_KEY=$(echo "${COMMIT_MSG}" | grep -oE '[A-Za-z0-9]+-[0-9]+' | head -n 1)
 
-      - name: Post Verification Comment on Jira Issue
-        if: steps.find_issue.outputs.issue != ''
-        uses: atlassian/gajira-comment@v3
-        continue-on-error: true
-        with:
-          issue: ${{ steps.find_issue.outputs.issue }}
-          comment: |
-            ✅ Automated CI verification passed on GitHub!
-            - Commit: ${{ github.sha }}
-            - Branch: ${{ github.ref_name }}
-            - Status: Automated tests verified. Moving ticket to Done.
+          if [ -z "$ISSUE_KEY" ]; then
+            echo "No Jira issue key found in commit message. Skipping transition."
+            exit 0
+          fi
 
-      - name: Auto-Transition Jira Issue to Done
-        if: steps.find_issue.outputs.issue != ''
-        uses: atlassian/gajira-transition@v3
-        continue-on-error: true
-        with:
-          issue: ${{ steps.find_issue.outputs.issue }}
-          transition: "Done"
+          echo "Detected Jira Issue Key: ${ISSUE_KEY}"
 
-      - name: Fallback Auto-Transition to DONE
-        if: steps.find_issue.outputs.issue != ''
-        uses: atlassian/gajira-transition@v3
-        continue-on-error: true
-        with:
-          issue: ${{ steps.find_issue.outputs.issue }}
-          transition: "DONE"
+          if [ -z "$JIRA_BASE_URL" ] || [ -z "$JIRA_USER_EMAIL" ] || [ -z "$JIRA_API_TOKEN" ]; then
+            echo "Jira secrets (JIRA_BASE_URL, JIRA_USER_EMAIL, JIRA_API_TOKEN) not configured. Skipping API call."
+            exit 0
+          fi
+
+          # Clean Base URL trailing slash
+          CLEAN_URL=$(echo "${JIRA_BASE_URL}" | sed 's/\/*$//')
+
+          echo "Connecting to Jira site: ${CLEAN_URL}"
+
+          # 2. Add Automated Comment via Jira REST API
+          COMMENT_BODY="✅ Automated CI verification passed on GitHub!\n- Commit: ${COMMIT_SHA}\n- Branch: ${BRANCH_NAME}\n- Status: Automated tests verified. Moving ticket to Done."
+          
+          curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -u "${JIRA_USER_EMAIL}:${JIRA_API_TOKEN}" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            --data "{\"body\": {\"type\": \"doc\", \"version\": 1, \"content\": [{\"type\": \"paragraph\", \"content\": [{\"type\": \"text\", \"text\": \"${COMMENT_BODY}\"}]}]}}" \
+            "${CLEAN_URL}/rest/api/3/issue/${ISSUE_KEY}/comment" || true
+
+          # 3. Get Available Transitions for Issue
+          TRANSITIONS_JSON=$(curl -s \
+            -X GET \
+            -u "${JIRA_USER_EMAIL}:${JIRA_API_TOKEN}" \
+            -H "Accept: application/json" \
+            "${CLEAN_URL}/rest/api/3/issue/${ISSUE_KEY}/transitions")
+
+          # Find transition ID matching "Done", "DONE", or "Complete"
+          DONE_TRANSITION_ID=$(echo "${TRANSITIONS_JSON}" | jq -r '.transitions[]? | select(.name == "Done" or .name == "DONE" or .name == "Complete" or .name == "Closed") | .id' | head -n 1)
+
+          if [ -n "$DONE_TRANSITION_ID" ] && [ "$DONE_TRANSITION_ID" != "null" ]; then
+            echo "Found Done transition ID: ${DONE_TRANSITION_ID}. Executing transition..."
+            curl -s -o /dev/null \
+              -X POST \
+              -u "${JIRA_USER_EMAIL}:${JIRA_API_TOKEN}" \
+              -H "Accept: application/json" \
+              -H "Content-Type: application/json" \
+              --data "{\"transition\": {\"id\": \"${DONE_TRANSITION_ID}\"}}" \
+              "${CLEAN_URL}/rest/api/3/issue/${ISSUE_KEY}/transitions"
+            echo "Successfully transitioned ${ISSUE_KEY} to DONE in Jira!"
+          else
+            echo "Could not find a transition named 'Done' or ticket is already in DONE state."
+          fi
