@@ -1,0 +1,36 @@
+Issue Type,Issue ID,Summary,Description,Epic Name,Epic Link,Priority,Labels
+Epic,FG-EP1,"EPIC 1: Platform Foundation & Infrastructure","Establish monorepo structure, Docker environment, PostgreSQL migrations, and OpenAPI 3.0 contracts.",Platform Foundation & Infrastructure,,High,infra
+Task,FG-101,"Setup monorepo folder structure & Docker Compose environment","Initialize apps/macos, apps/android, backend, packages, docs, and docker-compose.yml.",,FG-EP1,High,infra
+Task,FG-102,"Create PostgreSQL database schema & migration DDL scripts","Implement init.sql with users, devices, policies, policy_targets, usage_aggregates, and blocked_events tables.",,FG-EP1,High,database
+Task,FG-103,"Define OpenAPI 3.0 API Specification & contract definitions","Create openapi.yaml covering auth, devices, policies, usage sync, and health endpoints.",,FG-EP1,High,api
+Epic,FG-EP2,"EPIC 2: Backend Microservices & API","Implement Go backend HTTP services, JWT authentication, policy CRUD, and usage sync handlers.",Backend Microservices & API,,High,backend
+Story,FG-201,"Implement Auth service (JWT registration, login, refresh)","Develop password hashing with bcrypt, JWT access and refresh token generation, and auth endpoints.",,FG-EP2,High,auth
+Story,FG-202,"Implement Device management service","Implement POST /devices/register and GET /devices endpoints for macOS and Android nodes.",,FG-EP2,Medium,devices
+Story,FG-203,"Implement Policy CRUD service with versioning","Develop policy creation, listing, updating, and deletion endpoints with optimistic version counters.",,FG-EP2,High,policies
+Story,FG-204,"Implement Usage aggregation endpoint with idempotent session processing","Implement POST /usage/sync with daily duration upserts and cross-device total limit checks.",,FG-EP2,High,usage
+Epic,FG-EP3,"EPIC 3: macOS Client & Screen Time Integration","Develop native macOS SwiftUI client, FamilyControls authorization, DeviceActivity monitoring, and ManagedSettings shielding.",macOS Client & Screen Time Integration,,High,macos
+Story,FG-301,"Create SwiftUI Application architecture & SwiftData models","Build main DashboardView, navigation shell, and SwiftData local persistence models.",,FG-EP3,High,macos
+Story,FG-302,"Implement FamilyControls authorization request workflow","Request user authorization via AuthorizationCenter.shared.requestAuthorization for Screen Time APIs.",,FG-EP3,High,macos
+Story,FG-303,"Implement DeviceActivityMonitor extension for local threshold triggers","Create out-of-process DeviceActivityMonitorExtension to trigger local shields when thresholds are hit.",,FG-EP3,High,macos
+Story,FG-304,"Implement ManagedSettings custom Shield extensions","Apply ManagedSettingsStore shields to blocked apps/webDomains and implement custom ShieldConfigurationExtension UI.",,FG-EP3,High,macos
+Epic,FG-EP4,"EPIC 4: Android Client & Enforcement Subsystem","Develop native Android Jetpack Compose app, Room database, UsageStatsManager tracking, VpnService DNS sinkhole, and lock overlay.",Android Client & Enforcement Subsystem,,High,android
+Story,FG-401,"Create Jetpack Compose UI architecture & Room local database","Build DashboardScreen with dark mode design, Room DB entities, DAOs, and database migrations.",,FG-402,High,android
+Story,FG-402,"Implement UsageStatsManager tracking service","Implement foreground service listening to UsageEvents and calculating active app duration.",,FG-EP4,High,android
+Story,FG-403,"Implement VpnService local DNS filter for website blocking","Build FocusVpnService TUN interface returning NXDOMAIN for blocked domains without remote proxying.",,FG-EP4,High,android
+Story,FG-404,"Implement full-screen lock overlay UI for app enforcement","Display immutable overlay lock activity when daily app budget limit is hit.",,FG-EP4,High,android
+Epic,FG-EP5,"EPIC 5: Cross-Device Synchronization Engine","Build WebSocket broadcast hub and client synchronization engines for real-time limit triggers.",Cross-Device Synchronization Engine,,High,sync
+Story,FG-501,"Implement Go WebSocket broadcast hub","Develop WebSocket event hub in Go supporting client connections and broadcasting LIMIT_REACHED events.",,FG-EP5,High,sync
+Story,FG-502,"Implement macOS WebSocket client & offline delta sync queue","Build Swift WebSocket listener and local queue for offline session replay on reconnection.",,FG-EP5,High,sync
+Story,FG-503,"Implement Android WorkManager sync worker & reconnection logic","Implement periodic WorkManager sync task with exponential backoff for offline resilience.",,FG-EP5,High,sync
+Story,FG-504,"Implement server-side cross-device usage limit calculator","Calculate combined usage across macOS and Android devices in real-time.",,FG-EP5,High,sync
+Epic,FG-EP6,"EPIC 6: Analytics & Focus Sessions","Implement timed Focus Sessions mode and executive analytics charts.",Analytics & Focus Sessions,,Medium,analytics
+Story,FG-601,"Implement Focus Session countdown engine (macOS & Android)","Build on-demand focus session timer (15/30/45/60 mins) activating shields instantly.",,FG-EP6,Medium,focus
+Story,FG-602,"Implement Backend Analytics aggregation queries","Implement GET /analytics/daily and GET /analytics/weekly endpoints.",,FG-EP6,Medium,analytics
+Story,FG-603,"Build UI Analytics dashboards with native charts","Render top distraction apps, budget adherence trends, and device status cards.",,FG-EP6,Medium,analytics
+Epic,FG-EP7,"EPIC 7: Security & Anti-Tamper Engine","Implement system monotonic clock validation and secure token storage.",Security & Anti-Tamper Engine,,High,security
+Story,FG-701,"Implement Monotonic clock validation & tampering detector","Compare wall-clock elapsed time against CLOCK_MONOTONIC / SystemClock.elapsedRealtime() to prevent clock tampering.",,FG-EP7,High,security
+Story,FG-702,"Secure token storage (Keychain & Android Keystore integration)","Store JWT access and refresh tokens in Apple Keychain Services and Android Keystore HSM.",,FG-EP7,High,security
+Epic,FG-EP8,"EPIC 8: Quality Assurance & E2E Testing","Develop automated unit, API integration, and cross-device end-to-end test suites.",Quality Assurance & E2E Testing,,High,testing
+Task,FG-801,"Write Go integration tests for API endpoints","Implement integration test suite for auth, policies, and usage endpoints.",,FG-EP8,High,testing
+Task,FG-802,"Write macOS XCTest unit tests for Policy Engine","Implement XCTest suite for LocalPolicyEvaluator and SwiftData models.",,FG-EP8,High,testing
+Task,FG-803,"Write Android JUnit/Espresso tests for Room & Usage Engine","Implement JUnit tests for AndroidPolicyEvaluator, Room DAO, and Compose UI components.",,FG-EP8,High,testing
