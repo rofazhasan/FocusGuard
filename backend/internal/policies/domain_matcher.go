@@ -70,7 +70,37 @@ func NormalizeDomain(raw string) string {
 	return raw
 }
 
-// IsDomainMatch checks exact or subdomain match safely without false-positive substrings
+var knownPublicSuffixes = map[string]bool{
+	"co.uk": true, "org.uk": true, "gov.uk": true, "ac.uk": true,
+	"com.bd": true, "edu.bd": true, "gov.bd": true, "org.bd": true, "ac.bd": true,
+	"com.au": true, "net.au": true, "org.au": true, "edu.au": true,
+	"co.jp": true, "ne.jp": true, "ac.jp": true,
+	"co.in": true, "net.in": true, "org.in": true,
+	"github.io": true, "gitlab.io": true, "vercel.app": true, "pages.dev": true, "appspot.com": true,
+}
+
+// GetRegistrableDomain extracts apex registrable domain using PSL rules (e.g. "bbc.co.uk" from "m.news.bbc.co.uk")
+func GetRegistrableDomain(raw string) string {
+	host := NormalizeDomain(raw)
+	host = strings.TrimPrefix(host, "www.")
+	if host == "" {
+		return ""
+	}
+
+	parts := strings.Split(host, ".")
+	if len(parts) <= 2 {
+		return host
+	}
+
+	lastTwo := strings.Join(parts[len(parts)-2:], ".")
+	if knownPublicSuffixes[lastTwo] && len(parts) >= 3 {
+		return strings.Join(parts[len(parts)-3:], ".")
+	}
+
+	return strings.Join(parts[len(parts)-2:], ".")
+}
+
+// IsDomainMatch checks exact, subdomain, or PSL registrable domain match safely without false-positive substrings
 // Example: "m.youtube.com" matches "youtube.com", but "notyoutube.com" does NOT match "youtube.com"
 func IsDomainMatch(candidateDomain, targetDomain string) bool {
 	candidate := NormalizeDomain(candidateDomain)
@@ -91,6 +121,13 @@ func IsDomainMatch(candidateDomain, targetDomain string) bool {
 
 	// Subdomain match (must have dot prefix)
 	if strings.HasSuffix(cleanCandidate, "."+cleanTarget) {
+		return true
+	}
+
+	// PSL registrable apex match
+	candApex := GetRegistrableDomain(cleanCandidate)
+	targetApex := GetRegistrableDomain(cleanTarget)
+	if candApex == targetApex && cleanTarget == targetApex {
 		return true
 	}
 

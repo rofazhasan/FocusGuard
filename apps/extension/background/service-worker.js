@@ -9,6 +9,7 @@
 importScripts(
   '../core/domain-matcher.js',
   '../core/session-tracker.js',
+  '../core/dnr-compiler.js',
   '../storage/policy-cache.js',
   '../policy/policy-engine.js'
 );
@@ -92,9 +93,17 @@ async function fetchPoliciesFromServer() {
       const serverVersion = data.version || (data.length > 0 ? 2 : 1);
       if (serverVersion >= currentPolicyVersion) {
         currentPolicyVersion = serverVersion;
-        policyEngine.setPolicies(data.policies || data);
-        await policyCache.updatePolicies(data.policies || data, serverVersion);
-        console.log(`[FocusGuard Extension] Applied synchronized policy v${serverVersion}`);
+        const policies = data.policies || data;
+        policyEngine.setPolicies(policies);
+        await policyCache.updatePolicies(policies, serverVersion);
+
+        // Compile and sync native browser DeclarativeNetRequest dynamic rules
+        if (typeof DNRPolicyCompiler !== 'undefined') {
+          const dynamicRules = DNRPolicyCompiler.compileDynamicRules(policies, policyEngine.todayUsage);
+          await DNRPolicyCompiler.syncWithBrowser(dynamicRules);
+        }
+
+        console.log(`[FocusGuard Extension] Applied synchronized policy v${serverVersion} with native DNR rules.`);
       }
     }
   } catch (err) {

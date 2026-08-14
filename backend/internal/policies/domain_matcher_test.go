@@ -31,6 +31,17 @@ func TestDomainNormalizationAndMatching(t *testing.T) {
 	if IsDomainMatch("myoutube.com", "youtube.com") {
 		t.Errorf("CRITICAL SECURITY FLAW: myoutube.com matched youtube.com!")
 	}
+
+	// 4. Public Suffix List (PSL) Multi-Level Suffixes
+	if GetRegistrableDomain("m.news.bbc.co.uk") != "bbc.co.uk" {
+		t.Errorf("Expected bbc.co.uk from m.news.bbc.co.uk, got %s", GetRegistrableDomain("m.news.bbc.co.uk"))
+	}
+	if GetRegistrableDomain("portal.student.du.ac.bd") != "du.ac.bd" {
+		t.Errorf("Expected du.ac.bd from portal.student.du.ac.bd, got %s", GetRegistrableDomain("portal.student.du.ac.bd"))
+	}
+	if !IsDomainMatch("m.news.bbc.co.uk", "bbc.co.uk") {
+		t.Errorf("Expected PSL match for bbc.co.uk")
+	}
 }
 
 func TestDomainCategories(t *testing.T) {

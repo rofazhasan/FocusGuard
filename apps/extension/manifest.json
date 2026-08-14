@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "description": "Production cross-platform attention management and policy enforcement extension.",
   "permissions": [
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess",
     "webNavigation",
     "tabs",
     "storage",
