@@ -124,3 +124,56 @@ func (h *Handler) EndFocus(w http.ResponseWriter, r *http.Request) {
 		"endedAt": now,
 	})
 }
+
+type FocusPreset struct {
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	DurationMinutes int      `json:"durationMinutes"`
+	Description     string   `json:"description"`
+	BlockedCategories []string `json:"blockedCategories"`
+	AllowedDomains  []string `json:"allowedDomains"`
+	BreakMinutes    int      `json:"breakMinutes,omitempty"`
+}
+
+func (h *Handler) GetFocusPresets(w http.ResponseWriter, r *http.Request) {
+	presets := []FocusPreset{
+		{
+			ID:                "preset-deep-work",
+			Name:              "Deep Work Mode",
+			DurationMinutes:   90,
+			Description:       "Blocks all social, video, gaming, and news distractors. Ideal for complex coding & engineering tasks.",
+			BlockedCategories: []string{"SOCIAL", "VIDEO", "GAMING", "NEWS"},
+			AllowedDomains:    []string{"github.com", "stackoverflow.com", "developer.apple.com", "pkg.go.dev"},
+		},
+		{
+			ID:                "preset-study",
+			Name:              "University Study Mode",
+			DurationMinutes:   90,
+			Description:       "Blocks all entertainment. Whitelists university LMS, research portals, and documentation.",
+			BlockedCategories: []string{"ENTERTAINMENT", "SOCIAL", "GAMING"},
+			AllowedDomains:    []string{"canvas.instructure.com", "scholar.google.com", "du.ac.bd", "wikipedia.org"},
+		},
+		{
+			ID:                "preset-pomodoro-enforced",
+			Name:              "Enforced Pomodoro",
+			DurationMinutes:   50,
+			BreakMinutes:      10,
+			Description:       "50 minutes enforced distraction lockdown followed by a 10-minute relaxation break.",
+			BlockedCategories: []string{"SOCIAL", "VIDEO", "GAMING"},
+			AllowedDomains:    []string{"github.com", "stackoverflow.com"},
+		},
+		{
+			ID:                "preset-sleep",
+			Name:              "Sleep & Recovery Mode",
+			DurationMinutes:   480, // 8 hours
+			Description:       "Nightly protection mode blocking late-night infinite scroll distractors from 10:00 PM to 06:00 AM.",
+			BlockedCategories: []string{"SOCIAL", "GAMING", "VIDEO"},
+			AllowedDomains:    []string{},
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(presets)
+}
+

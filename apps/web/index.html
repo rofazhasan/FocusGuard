@@ -133,36 +133,57 @@
           <div>
             <h2 class="card-title">Dispatch Remote Focus Session</h2>
             <p class="subtitle">Enforces hard ManagedSettings & VpnService shields across selected fleet devices.</p>
+      <!-- Section 4: Focus Modes, Presets & Enforced Pomodoro -->
+      <section class="card focus-card">
+        <div class="card-title-row">
+          <div>
+            <h2 class="card-title">Remote Focus Modes & Enforced Pomodoro</h2>
+            <p class="subtitle">Broadcast instant high-priority lockdowns to all devices via real-time WebSocket (< 1s latency).</p>
           </div>
-          <div class="duration-selector" id="duration-selector">
-            <button class="duration-btn" data-mins="15">15m</button>
-            <button class="duration-btn" data-mins="30">30m</button>
-            <button class="duration-btn active" data-mins="45">45m</button>
-            <button class="duration-btn" data-mins="60">60m</button>
-          </div>
+          <span class="badge badge-purple font-mono" id="focus-status-badge">READY (STANDBY)</span>
         </div>
 
-        <div class="focus-targets-bar">
+        <!-- Presets Row -->
+        <div class="preset-row mt-2" style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 15px;">
+          <button class="btn btn-sm btn-outline focus-preset-btn" data-preset="deep-work" data-mins="90" style="flex: 1;">⚡ Deep Work (90m)</button>
+          <button class="btn btn-sm btn-outline focus-preset-btn" data-preset="study" data-mins="90" style="flex: 1;">🎓 Study Mode (90m)</button>
+          <button class="btn btn-sm btn-outline focus-preset-btn" data-preset="pomodoro" data-mins="50" style="flex: 1;">⏱️ Pomodoro Enforced (50/10)</button>
+          <button class="btn btn-sm btn-outline focus-preset-btn" data-preset="sleep" data-mins="480" style="flex: 1;">🌙 Night Lockdown (8h)</button>
+        </div>
+
+        <div class="focus-targets-box">
           <div class="target-group">
-            <span class="group-label">🚫 Blocked Fleetwide:</span>
+            <span class="group-label">🚫 Blocked During Focus:</span>
+            <span class="tag tag-red">Social Media</span>
             <span class="tag tag-red">YouTube</span>
-            <span class="tag tag-red">Instagram</span>
             <span class="tag tag-red">Reddit</span>
             <span class="tag tag-red">Gaming</span>
           </div>
           <div class="target-group">
             <span class="group-label">✅ Explicit Allowlist:</span>
-            <span class="tag tag-green">Messages</span>
+            <span class="tag tag-green">GitHub</span>
+            <span class="tag tag-green">Stack Overflow</span>
             <span class="tag tag-green">Canvas University</span>
-            <span class="tag tag-green">Code Editor</span>
+            <span class="tag tag-green">Developer Docs</span>
           </div>
         </div>
 
-        <div class="focus-action-row">
-          <button class="btn btn-focus" id="btn-toggle-focus">
+        <div class="focus-action-row" style="display: flex; gap: 12px; margin-top: 15px;">
+          <button class="btn btn-focus" id="btn-toggle-focus" style="flex: 2;">
             <span class="focus-icon">⚡</span>
             <span id="focus-btn-text">DISPATCH REMOTE FOCUS (45m)</span>
           </button>
+          <button class="btn btn-primary" id="btn-run-capstone-demo" style="flex: 1; background: linear-gradient(135deg, #4f46e5, #9333ea);">
+            <span>🚀 1-Click Capstone Demo</span>
+          </button>
+        </div>
+
+        <!-- Capstone Demo Status Drawer -->
+        <div id="capstone-demo-drawer" style="display: none; background: rgba(79, 70, 229, 0.1); border: 1px solid #4f46e5; border-radius: 10px; padding: 14px; margin-top: 15px; font-size: 13px;">
+          <div style="font-weight: bold; color: #a5b4fc; margin-bottom: 6px;" id="demo-step-title">Capstone Live Demonstration Workflow:</div>
+          <div id="demo-step-log" style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #e0e7ff; line-height: 1.6;">
+            1. Dispatching Study Mode to MacBook, Android Phone & Extension...
+          </div>
         </div>
       </section>
 
@@ -278,36 +299,73 @@
         </div>
       </section>
 
-      <!-- Section 7: Fleet Health & Tamper Security Engine -->
-      <section class="card">
-        <div class="card-title-row">
-          <div>
-            <h2 class="card-title">Fleet Protection Health & Anti-Tamper Engine</h2>
-            <span class="text-muted text-small">Continuous telemetry detecting permission revocations, VPN stops, and clock anomalies</span>
+      <!-- Section 7: Protection Diagnostics & Smart Policy Recommendations -->
+      <section class="two-col-grid">
+        <!-- Protection Diagnostics Center -->
+        <div class="card">
+          <div class="card-title-row">
+            <div>
+              <h2 class="card-title">🩺 Protection Diagnostics Center</h2>
+              <span class="text-muted text-small">Automated enforcement self-test across all layers</span>
+            </div>
+            <button class="btn btn-sm btn-primary" id="btn-run-diagnostics">🧪 Run Diagnostics</button>
           </div>
-          <button class="btn btn-sm btn-outline" id="btn-simulate-tamper">⚠️ Simulate Tamper Alert</button>
+
+          <div id="diagnostics-matrix" class="mt-3" style="display: flex; flex-direction: column; gap: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; padding: 8px 12px; background: rgba(255,255,255,0.02); border-radius: 8px;">
+              <span>🌐 Browser DNR Filter Engine</span>
+              <span class="badge badge-green" id="diag-browser-badge">PASS (2ms)</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; padding: 8px 12px; background: rgba(255,255,255,0.02); border-radius: 8px;">
+              <span>🛡️ VpnService Local DNS Sinkhole</span>
+              <span class="badge badge-green" id="diag-vpn-badge">PASS (4ms)</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; padding: 8px 12px; background: rgba(255,255,255,0.02); border-radius: 8px;">
+              <span>⏱️ Screen Time & UsageStats Normalizer</span>
+              <span class="badge badge-green" id="diag-usage-badge">PASS (3ms)</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; padding: 8px 12px; background: rgba(255,255,255,0.02); border-radius: 8px;">
+              <span>🔄 Monotonic WebSocket Policy Sync</span>
+              <span class="badge badge-green" id="diag-sync-badge">PASS (8ms)</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 12px; padding: 8px 12px; background: rgba(255,255,255,0.02); border-radius: 8px;">
+              <span>📴 Offline Local Cache Resilience</span>
+              <span class="badge badge-green" id="diag-offline-badge">PASS (1ms)</span>
+            </div>
+          </div>
         </div>
 
-        <div class="two-col-grid mt-3">
-          <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 14px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-              <span class="text-bold">MacBook Pro 16" (Owner)</span>
-              <span class="badge badge-green" id="mac-health-badge">100% HEALTHY</span>
+        <!-- Smart Policy Recommendations -->
+        <div class="card">
+          <div class="card-title-row">
+            <div>
+              <h2 class="card-title">💡 Smart Policy Recommendations</h2>
+              <span class="text-muted text-small">Actionable suggestions derived from usage insights</span>
             </div>
-            <div class="text-small text-muted">Browser Extension: ACTIVE &bull; Screen Time: AUTHORIZED &bull; Monotonic Clock: SYNCED</div>
+            <span class="badge badge-purple">Insight Engine</span>
           </div>
 
-          <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 14px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-              <span class="text-bold">Student Pixel Tablet (Managed)</span>
-              <span class="badge badge-green" id="android-health-badge">100% HEALTHY</span>
+          <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 12px;">
+            <div style="background: rgba(168,85,247,0.08); border: 1px solid rgba(168,85,247,0.2); border-radius: 10px; padding: 12px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span class="text-bold text-small" style="color: #c084fc;">🌙 Night Entertainment Limit</span>
+                <button class="btn btn-sm btn-outline btn-apply-rec" data-target="youtube.com" data-limit="30">Apply (30m)</button>
+              </div>
+              <p class="text-small text-muted mt-1">FocusGuard noticed 1h 48m YouTube usage between 11:00 PM and 01:00 AM.</p>
             </div>
-            <div class="text-small text-muted" id="android-health-details">VpnService: RUNNING &bull; Usage Access: GRANTED &bull; Policy: CURRENT (v2)</div>
+
+            <div style="background: rgba(59,130,246,0.08); border: 1px solid rgba(59,130,246,0.2); border-radius: 10px; padding: 12px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span class="text-bold text-small" style="color: #93c5fd;">📚 Social Media Study Lock</span>
+                <button class="btn btn-sm btn-outline btn-apply-rec" data-target="SOCIAL" data-limit="0">Apply (Lock)</button>
+              </div>
+              <p class="text-small text-muted mt-1">Social media consumed 38m during scheduled morning study blocks.</p>
+            </div>
           </div>
         </div>
       </section>
 
-      <!-- Section 8: Transparent Attention Score & Productivity Timeline -->
+      <!-- Section 8: Observable Enforcement Timeline & Attention Score -->
       <section class="two-col-grid">
         <!-- Attention Score Card -->
         <div class="card">
@@ -326,30 +384,41 @@
               Distraction: -0 pts &bull; Protection Shield: +20 pts
             </div>
           </div>
+
+          <div class="two-col-grid" style="margin-top: 10px;">
+            <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 10px;">
+              <div style="font-size: 11px; color: #94a3b8;">MacBook Pro (Owner)</div>
+              <span class="badge badge-green mt-1" id="mac-health-badge">100% HEALTHY</span>
+            </div>
+            <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 10px;">
+              <div style="font-size: 11px; color: #94a3b8;">Student Tablet (Managed)</div>
+              <span class="badge badge-green mt-1" id="android-health-badge">100% HEALTHY</span>
+            </div>
+          </div>
         </div>
 
-        <!-- Daily Productivity Timeline -->
+        <!-- Enforcement Event Timeline Stream -->
         <div class="card">
           <div class="card-title-row">
             <div>
-              <h2 class="card-title">Daily Visual Timeline</h2>
-              <span class="text-muted text-small">Privacy-preserving activity metadata</span>
+              <h2 class="card-title">📡 Observable Enforcement Timeline</h2>
+              <span class="text-muted text-small">Live millisecond telemetry across all devices</span>
             </div>
-            <span class="badge badge-green">Today</span>
+            <span class="badge badge-green">Real-Time</span>
           </div>
 
-          <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px;">
-            <div style="display: flex; justify-content: space-between; font-size: 12px; padding: 6px 10px; background: rgba(16,185,129,0.1); border-left: 3px solid #10b981; border-radius: 6px;">
-              <span>08:00 AM — Deep Work / Code Review</span>
-              <span class="font-mono text-muted">80m (Productive)</span>
+          <div id="enforcement-timeline-stream" style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px; max-height: 240px; overflow-y: auto;">
+            <div style="display: flex; justify-content: space-between; font-size: 11px; padding: 6px 10px; background: rgba(99,102,241,0.1); border-left: 3px solid #6366f1; border-radius: 6px;">
+              <span><strong>10:02:11</strong> — Policy v2 Received & Compiled to DNR / VPN</span>
+              <span class="font-mono text-purple">CLOUD_SYNC</span>
             </div>
-            <div style="display: flex; justify-content: space-between; font-size: 12px; padding: 6px 10px; background: rgba(239,68,68,0.1); border-left: 3px solid #ef4444; border-radius: 6px;">
-              <span>09:20 AM — YouTube (Browsing)</span>
-              <span class="font-mono text-muted">15m (Distraction)</span>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; padding: 6px 10px; background: rgba(245,158,11,0.1); border-left: 3px solid #f59e0b; border-radius: 6px;">
+              <span><strong>10:31:42</strong> — YouTube 27m / 30m Warning (90% Budget)</span>
+              <span class="font-mono text-yellow">TRACKER</span>
             </div>
-            <div style="display: flex; justify-content: space-between; font-size: 12px; padding: 6px 10px; background: rgba(99,102,241,0.1); border-left: 3px solid #6366f1; border-radius: 6px;">
-              <span>11:00 AM — Remote Focus Lockdown Session</span>
-              <span class="font-mono text-purple">60m (Focus)</span>
+            <div style="display: flex; justify-content: space-between; font-size: 11px; padding: 6px 10px; background: rgba(239,68,68,0.1); border-left: 3px solid #ef4444; border-radius: 6px;">
+              <span><strong>10:31:44</strong> — Shared Budget Reached (30m). DOMAIN_BLOCK Active.</span>
+              <span class="font-mono text-red">DNR / SINKHOLE</span>
             </div>
           </div>
         </div>

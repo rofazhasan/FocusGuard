@@ -170,15 +170,19 @@ func main() {
 
 		r.Post("/api/v1/usage/sync", usageHandler.SyncUsage)
 
+		r.Get("/api/v1/health/fleet", protectionHandler.GetFleetHealth)
+		r.Post("/api/v1/health/tamper", protectionHandler.ReportTamperEvent)
+		r.Post("/api/v1/health/diagnostics", protectionHandler.RunDiagnostics)
+
 		r.Get("/api/v1/analytics/daily", analyticsHandler.GetDailyAnalytics)
 		r.Get("/api/v1/analytics/weekly", analyticsHandler.GetWeeklyAnalytics)
 		r.Get("/api/v1/analytics/timeline", analyticsHandler.GetTimeline)
-
-		r.Get("/api/v1/health/fleet", protectionHandler.GetFleetHealth)
-		r.Post("/api/v1/health/tamper", protectionHandler.ReportTamperEvent)
+		r.Get("/api/v1/analytics/enforcement-timeline", analyticsHandler.GetEnforcementTimeline)
+		r.Get("/api/v1/analytics/recommendations", analyticsHandler.GetRecommendations)
 
 		r.Post("/api/v1/focus/start", focusHandler.StartFocus)
 		r.Post("/api/v1/focus/end", focusHandler.EndFocus)
+		r.Get("/api/v1/focus/presets", focusHandler.GetFocusPresets)
 	})
 
 	server := &http.Server{

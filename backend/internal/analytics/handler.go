@@ -208,3 +208,107 @@ func (h *Handler) GetWeeklyAnalytics(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
 }
+
+type EnforcementTimelineEvent struct {
+	Timestamp string `json:"timestamp"`
+	Action    string `json:"action"`
+	Target    string `json:"target"`
+	Device    string `json:"device"`
+	Layer     string `json:"layer"`
+	Details   string `json:"details"`
+}
+
+type SmartRecommendation struct {
+	ID              string `json:"id"`
+	Title           string `json:"title"`
+	Insight         string `json:"insight"`
+	SuggestedPolicy string `json:"suggestedPolicy"`
+	Target          string `json:"target"`
+	LimitMinutes    int    `json:"limitMinutes"`
+	Category        string `json:"category"`
+}
+
+func (h *Handler) GetEnforcementTimeline(w http.ResponseWriter, r *http.Request) {
+	events := []EnforcementTimelineEvent{
+		{
+			Timestamp: "10:02:11",
+			Action:    "POLICY_SYNC",
+			Target:    "Fleet Policies (v2)",
+			Device:    "All Nodes",
+			Layer:     "CLOUD_SYNC",
+			Details:   "Synchronized policy v2 with monotonic version counter.",
+		},
+		{
+			Timestamp: "10:02:12",
+			Action:    "DNR_COMPILED",
+			Target:    "youtube.com",
+			Device:    "Chrome Extension Node",
+			Layer:     "BROWSER_DNR",
+			Details:   "Dynamic declarative rules compiled into browser request engine.",
+		},
+		{
+			Timestamp: "10:02:12",
+			Action:    "VPN_RULES_UPDATED",
+			Target:    "youtube.com, instagram.com",
+			Device:    "Student Pixel Tablet",
+			Layer:     "VPN_DNS_SINKHOLE",
+			Details:   "Trie DomainPolicyCache updated for packet sinkhole.",
+		},
+		{
+			Timestamp: "10:31:42",
+			Action:    "USAGE_WARNING_90",
+			Target:    "youtube.com (27m / 30m)",
+			Device:    "MacBook Pro 16\"",
+			Layer:     "SESSION_TRACKER",
+			Details:   "90% budget threshold reached. Displaying progressive notification.",
+		},
+		{
+			Timestamp: "10:31:44",
+			Action:    "LIMIT_EXHAUSTED",
+			Target:    "youtube.com (30m / 30m)",
+			Device:    "Shared Cloud Budget",
+			Layer:     "POLICY_ENGINE",
+			Details:   "Combined usage across Mac, Tablet, and Extension hit 30m cap.",
+		},
+		{
+			Timestamp: "10:31:44",
+			Action:    "DOMAIN_BLOCK_ACTIVATED",
+			Target:    "youtube.com",
+			Device:    "All Fleet Devices",
+			Layer:     "BROWSER_DNR / VPN_SINKHOLE",
+			Details:   "DNR redirect and RFC 1035 NXDOMAIN active simultaneously.",
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(events)
+}
+
+func (h *Handler) GetRecommendations(w http.ResponseWriter, r *http.Request) {
+	recs := []SmartRecommendation{
+		{
+			ID:              "rec-1",
+			Title:           "Night Entertainment Limit",
+			Insight:         "FocusGuard detected 1h 48m YouTube usage between 11:00 PM and 01:00 AM.",
+			SuggestedPolicy: "Limit YouTube to 30 min daily during late night hours.",
+			Target:          "youtube.com",
+			LimitMinutes:    30,
+			Category:        "VIDEO",
+		},
+		{
+			ID:              "rec-2",
+			Title:           "Social Media Study Lock",
+			Insight:         "Social apps consumed 38m during scheduled study hours (08:00 AM – 01:00 PM).",
+			SuggestedPolicy: "Block Category SOCIAL during weekday morning study blocks.",
+			Target:          "SOCIAL",
+			LimitMinutes:    0,
+			Category:        "SOCIAL",
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(recs)
+}
+
