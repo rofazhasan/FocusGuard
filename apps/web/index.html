@@ -3,99 +3,126 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FocusGuard — Your attention. Your rules.</title>
+  <title>FocusGuard — One Policy. Every Protected Device.</title>
   <link rel="stylesheet" href="style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
   <div id="app" class="app-container">
     <!-- Top Navigation Bar -->
     <header class="navbar">
       <div class="brand">
-        <div class="logo-icon">🛡️</div>
+        <div class="logo-shield">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            <path d="m9 12 2 2 4-4"/>
+          </svg>
+        </div>
         <div class="brand-text">
           <span class="brand-title">FOCUSGUARD</span>
-          <span class="brand-tagline">Your attention. Your rules.</span>
+          <span class="brand-tagline">One Policy. Every Protected Device.</span>
         </div>
       </div>
+
+      <!-- Mode Switcher (Owner vs Managed Device View) -->
+      <div class="mode-switcher-container">
+        <button class="mode-btn active" id="btn-mode-owner">👑 Owner Control Center</button>
+        <button class="mode-btn" id="btn-mode-managed">📱 Managed Device View</button>
+      </div>
+
       <div class="header-actions">
+        <div class="live-stream-badge" id="live-stream-indicator">
+          <span class="pulse-dot"></span>
+          <span id="live-active-target">Monitoring: Initializing...</span>
+        </div>
         <div class="status-badge status-protected" id="system-status">
           <span class="status-dot"></span>
-          <span id="status-text">Protected Across 2 Devices</span>
+          <span id="status-text">Fleet Protected</span>
         </div>
-        <button class="btn btn-secondary" id="btn-blocker-demo">Preview Block Screen</button>
+        <button class="btn btn-secondary" id="btn-blocker-demo">Preview Shield</button>
       </div>
     </header>
 
-    <!-- Main Content Area -->
-    <main class="main-content">
+    <!-- VIEW A: OWNER CONTROL CENTER -->
+    <div id="view-owner" class="view-panel">
       <!-- Section 1: Dashboard Header -->
       <section class="dashboard-header">
         <div>
-          <h1 class="page-title">Today's Attention</h1>
-          <p class="subtitle">Cross-device attention budgets and real-time policy enforcement.</p>
+          <h1 class="page-title">Fleet Command Center</h1>
+          <p class="subtitle">Centrally manage policies, enroll devices, dispatch remote focus, and view live adherence.</p>
         </div>
-        <button class="btn btn-primary" id="btn-new-policy">+ New Policy</button>
+        <div class="header-btn-row">
+          <button class="btn btn-secondary" id="btn-pair-device">📱 + Pair New Device</button>
+          <button class="btn btn-primary" id="btn-new-policy">+ Create Scoped Policy</button>
+        </div>
       </section>
 
       <!-- Section 2: Metric Overview Grid -->
       <section class="metrics-grid">
         <div class="card metric-card">
           <div class="card-header">
-            <span class="card-label">Total Focus</span>
+            <span class="card-label">Fleet Focus Time</span>
             <span class="badge badge-blue">Today</span>
           </div>
-          <div class="metric-value" id="metric-total-focus">2h 17m</div>
-          <div class="metric-subtext">↑ 14% more than yesterday</div>
+          <div class="metric-value-container">
+            <span class="metric-value" id="metric-total-focus">0m</span>
+          </div>
+          <div class="metric-subtext">Cumulative across all enrolled nodes</div>
         </div>
 
         <div class="card metric-card">
           <div class="card-header">
-            <span class="card-label">Attention Budget</span>
-            <span class="badge badge-purple" id="budget-ratio-badge">71 / 90 min</span>
+            <span class="card-label">Combined Attention Budget</span>
+            <span class="badge badge-purple" id="budget-ratio-badge">0 / 30 min</span>
           </div>
           <div class="metric-value-container">
-            <span class="metric-value" id="metric-budget-used">71</span>
-            <span class="metric-unit">/ 90 min</span>
+            <span class="metric-value" id="metric-budget-used">0</span>
+            <span class="metric-unit" id="metric-budget-total">/ 30 min</span>
           </div>
           <div class="progress-bar-container">
-            <div class="progress-bar-fill" id="budget-progress-fill" style="width: 78.8%;"></div>
+            <div class="progress-bar-fill" id="budget-progress-fill" style="width: 0%;"></div>
           </div>
         </div>
 
-        <div class="card metric-card">
+        <div class="card metric-card focus-card-highlight">
           <div class="card-header">
-            <span class="card-label">Active Focus Session</span>
-            <span class="badge badge-green" id="focus-status-badge">Ready</span>
+            <span class="card-label">Remote Focus Lockdown</span>
+            <span class="badge badge-green" id="focus-status-badge">Standby</span>
           </div>
-          <div class="metric-value" id="focus-timer-display">45:00</div>
-          <div class="metric-subtext" id="focus-timer-subtext">Click below to start instant lockout</div>
+          <div class="metric-value font-mono" id="focus-timer-display">45:00</div>
+          <div class="metric-subtext" id="focus-timer-subtext">Click below to dispatch instant fleet lock</div>
         </div>
       </section>
 
-      <!-- Section 3: Two-Column Top Apps & Enrolled Devices -->
+      <!-- Section 3: Two-Column Live Fleet & Scoped Policies -->
       <section class="two-col-grid">
-        <!-- Top Apps Card -->
+        <!-- Enrolled Fleet Devices -->
         <div class="card">
           <div class="card-title-row">
-            <h2 class="card-title">Top Applications & Websites</h2>
-            <span class="text-muted text-small">Combined Usage</span>
+            <div>
+              <h2 class="card-title">Enrolled Fleet Devices</h2>
+              <span class="text-muted text-small">Authenticated nodes enforcing local policy</span>
+            </div>
+            <span class="badge badge-green" id="device-count-badge">2 Devices</span>
           </div>
-          <div class="app-list" id="app-list-container">
-            <!-- Dynamically Rendered App Items -->
+          <div class="device-list" id="device-list-container">
+            <!-- Dynamically populated -->
           </div>
         </div>
 
-        <!-- Enrolled Devices Card -->
+        <!-- Scoped Active Policies -->
         <div class="card">
           <div class="card-title-row">
-            <h2 class="card-title">Enrolled Devices</h2>
-            <button class="btn-link" id="btn-add-device">+ Enroll Device</button>
+            <div>
+              <h2 class="card-title">Scoped Attention Policies</h2>
+              <span class="text-muted text-small">Server-authoritative rules with device targeting</span>
+            </div>
+            <span class="badge badge-purple" id="policy-count-badge">0 Active</span>
           </div>
-          <div class="device-list" id="device-list-container">
-            <!-- Dynamically Rendered Device Items -->
+          <div class="policy-list" id="policy-list-container">
+            <!-- Dynamically populated -->
           </div>
         </div>
       </section>
@@ -104,8 +131,8 @@
       <section class="card focus-control-card">
         <div class="focus-control-header">
           <div>
-            <h2 class="card-title">Launch Focus Session</h2>
-            <p class="subtitle">Instantly restrict selected distracting apps and web domains across all devices.</p>
+            <h2 class="card-title">Dispatch Remote Focus Session</h2>
+            <p class="subtitle">Enforces hard ManagedSettings & VpnService shields across selected fleet devices.</p>
           </div>
           <div class="duration-selector" id="duration-selector">
             <button class="duration-btn" data-mins="15">15m</button>
@@ -117,88 +144,346 @@
 
         <div class="focus-targets-bar">
           <div class="target-group">
-            <span class="group-label">🚫 Blocked Targets:</span>
+            <span class="group-label">🚫 Blocked Fleetwide:</span>
             <span class="tag tag-red">YouTube</span>
             <span class="tag tag-red">Instagram</span>
             <span class="tag tag-red">Reddit</span>
-            <span class="tag tag-red">Games</span>
+            <span class="tag tag-red">Gaming</span>
           </div>
           <div class="target-group">
-            <span class="group-label">✅ Allowed Essentials:</span>
+            <span class="group-label">✅ Explicit Allowlist:</span>
             <span class="tag tag-green">Messages</span>
-            <span class="tag tag-green">University Apps</span>
-            <span class="tag tag-green">IDE & Terminal</span>
+            <span class="tag tag-green">Canvas University</span>
+            <span class="tag tag-green">Code Editor</span>
           </div>
         </div>
 
         <div class="focus-action-row">
           <button class="btn btn-focus" id="btn-toggle-focus">
             <span class="focus-icon">⚡</span>
-            <span id="focus-btn-text">START FOCUS (45m)</span>
+            <span id="focus-btn-text">DISPATCH REMOTE FOCUS (45m)</span>
           </button>
         </div>
       </section>
 
-      <!-- Section 5: Cross-Device Usage Simulator -->
+      <!-- Section 5: Cross-Device Usage Ingestion & Shared Limit Test -->
       <section class="card simulator-card">
         <div class="card-title-row">
-          <h2 class="card-title">Cross-Device Attention Simulator</h2>
-          <span class="badge badge-blue">Real-Time Sync Engine</span>
+          <div>
+            <h2 class="card-title">Shared Attention Limit & Ingestion Test</h2>
+            <p class="subtitle">Simulate real usage deltas across MacBook (Owner), Tablet (Managed), and Extension to verify simultaneous fleet enforcement.</p>
+          </div>
+          <span class="badge badge-green">Idempotent Sync</span>
         </div>
-        <p class="subtitle">Simulate real usage accrued on MacBook Pro and Android Phone to test shared limit trigger.</p>
 
         <div class="sim-controls-grid">
           <div class="sim-device-box">
             <div class="sim-header">
-              <span>💻 MacBook Pro</span>
-              <span class="text-muted" id="sim-mac-youtube-text">YouTube: 17m</span>
+              <span>💻 MacBook Pro (Owner Node)</span>
+              <span class="text-muted font-mono" id="sim-mac-status">Active</span>
             </div>
+            <p class="text-small text-muted mb-2">Record activity on Owner Mac:</p>
             <div class="btn-group">
-              <button class="btn btn-sm" id="btn-sim-mac-add">+ 5m YouTube (Mac)</button>
+              <button class="btn btn-sm btn-outline" id="btn-sync-mac-youtube">+ 5m YouTube</button>
+              <button class="btn btn-sm btn-outline" id="btn-sync-mac-reddit">+ 5m Reddit</button>
             </div>
           </div>
 
           <div class="sim-device-box">
             <div class="sim-header">
-              <span>📱 Android Phone</span>
-              <span class="text-muted" id="sim-android-youtube-text">YouTube: 11m</span>
+              <span>📱 Student Pixel Tablet (Managed Node)</span>
+              <span class="text-muted font-mono" id="sim-android-status">Active</span>
             </div>
+            <p class="text-small text-muted mb-2">Record activity on Managed Tablet:</p>
             <div class="btn-group">
-              <button class="btn btn-sm" id="btn-sim-android-add">+ 5m YouTube (Android)</button>
+              <button class="btn btn-sm btn-outline" id="btn-sync-android-youtube">+ 5m YouTube</button>
+              <button class="btn btn-sm btn-outline" id="btn-sync-android-instagram">+ 5m Instagram</button>
             </div>
           </div>
 
           <div class="sim-total-box">
             <div class="sim-header">
-              <span>☁️ Cloud Aggregated YouTube Usage</span>
-              <span class="text-bold" id="sim-cloud-total-text">28 / 30 min</span>
+              <span>☁️ Shared Cloud Aggregation</span>
+              <span class="text-bold font-mono" id="sim-cloud-summary">0s consumed</span>
             </div>
             <div class="progress-bar-container">
-              <div class="progress-bar-fill fill-red" id="sim-progress-fill" style="width: 93.3%;"></div>
+              <div class="progress-bar-fill fill-red" id="sim-progress-fill" style="width: 0%;"></div>
+            </div>
+            <p class="text-small text-muted mt-2" id="sim-enforcement-text">When combined total reaches 30m, LIMIT_REACHED triggers on ALL devices.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 6: Policy Simulator & Conflict Detector & Policy Explainer -->
+      <section class="two-col-grid">
+        <!-- Tool A: Policy Simulator & Conflict Detector -->
+        <div class="card">
+          <div class="card-title-row">
+            <div>
+              <h2 class="card-title">Policy Simulator & Conflict Detector</h2>
+              <span class="text-muted text-small">Dry-run policies before fleetwide dispatch</span>
+            </div>
+            <span class="badge badge-blue">Dry Run</span>
+          </div>
+
+          <div class="form-row mt-2">
+            <div class="form-group" style="flex: 2;">
+              <label class="text-small text-muted">Test Target / Category</label>
+              <input type="text" id="sim-test-target-input" class="form-control" value="SOCIAL" placeholder="e.g. SOCIAL, youtube.com">
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="text-small text-muted">Mode</label>
+              <select id="sim-test-mode-select" class="form-control">
+                <option value="BLOCK" selected>BLOCK</option>
+                <option value="ALLOW">ALLOW</option>
+              </select>
+            </div>
+          </div>
+          <button class="btn btn-sm btn-primary mt-2" id="btn-run-simulation">Run Policy Simulation</button>
+
+          <div class="sim-result-box mt-3" id="sim-result-container" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px; font-size: 12px;">
+            <div class="text-bold text-purple" id="sim-res-action">Ready to simulate.</div>
+            <div class="text-muted mt-1" id="sim-res-explanation">Click 'Run Policy Simulation' to check impacted domains, devices, and conflicts.</div>
+            <div class="mt-2 text-small" id="sim-res-domains"></div>
+            <div class="mt-2 text-small text-yellow" id="sim-res-conflicts"></div>
+          </div>
+        </div>
+
+        <!-- Tool B: Policy Explainer -->
+        <div class="card">
+          <div class="card-title-row">
+            <div>
+              <h2 class="card-title">Policy Explainer ("Why Blocked?")</h2>
+              <span class="text-muted text-small">Inspect reasons for domain enforcement</span>
+            </div>
+            <span class="badge badge-purple">Inspector</span>
+          </div>
+
+          <div class="form-group mt-2">
+            <label class="text-small text-muted">Enter Domain to Inspect</label>
+            <div style="display: flex; gap: 8px;">
+              <input type="text" id="explain-domain-input" class="form-control" value="m.youtube.com" placeholder="e.g. m.youtube.com">
+              <button class="btn btn-sm btn-secondary" id="btn-explain-domain">Inspect</button>
+            </div>
+          </div>
+
+          <div class="explain-result-box mt-3" id="explain-result-container" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px; font-size: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="text-bold" id="explain-target-title">m.youtube.com</span>
+              <span class="badge badge-red" id="explain-status-badge">RESTRICTED</span>
+            </div>
+            <div class="mt-2 text-muted" id="explain-reason-text">Daily attention budget reached (YouTube Daily Budget).</div>
+            <div class="mt-2 text-small" style="color: #818cf8;" id="explain-layer-text">Enforcing Layer: BROWSER_EXTENSION / VPN_DNS_SINKHOLE</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 7: Fleet Health & Tamper Security Engine -->
+      <section class="card">
+        <div class="card-title-row">
+          <div>
+            <h2 class="card-title">Fleet Protection Health & Anti-Tamper Engine</h2>
+            <span class="text-muted text-small">Continuous telemetry detecting permission revocations, VPN stops, and clock anomalies</span>
+          </div>
+          <button class="btn btn-sm btn-outline" id="btn-simulate-tamper">⚠️ Simulate Tamper Alert</button>
+        </div>
+
+        <div class="two-col-grid mt-3">
+          <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <span class="text-bold">MacBook Pro 16" (Owner)</span>
+              <span class="badge badge-green" id="mac-health-badge">100% HEALTHY</span>
+            </div>
+            <div class="text-small text-muted">Browser Extension: ACTIVE &bull; Screen Time: AUTHORIZED &bull; Monotonic Clock: SYNCED</div>
+          </div>
+
+          <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 14px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <span class="text-bold">Student Pixel Tablet (Managed)</span>
+              <span class="badge badge-green" id="android-health-badge">100% HEALTHY</span>
+            </div>
+            <div class="text-small text-muted" id="android-health-details">VpnService: RUNNING &bull; Usage Access: GRANTED &bull; Policy: CURRENT (v2)</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 8: Transparent Attention Score & Productivity Timeline -->
+      <section class="two-col-grid">
+        <!-- Attention Score Card -->
+        <div class="card">
+          <div class="card-title-row">
+            <div>
+              <h2 class="card-title">Transparent Attention Score</h2>
+              <span class="text-muted text-small">Calculated from focus completion, adherence, and shielded attempts</span>
+            </div>
+            <span class="badge badge-purple" id="score-rating-badge">EXCELLENT</span>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 20px; margin: 16px 0;">
+            <div style="font-size: 42px; font-weight: 800; color: #a855f7; font-family: 'JetBrains Mono', monospace;" id="score-display">85<span style="font-size: 20px; color: #94a3b8;">/100</span></div>
+            <div style="font-size: 12px; color: #94a3b8; line-height: 1.5;" id="score-formula-text">
+              Focus: +35 pts &bull; Limit Adherence: +30 pts<br>
+              Distraction: -0 pts &bull; Protection Shield: +20 pts
+            </div>
+          </div>
+        </div>
+
+        <!-- Daily Productivity Timeline -->
+        <div class="card">
+          <div class="card-title-row">
+            <div>
+              <h2 class="card-title">Daily Visual Timeline</h2>
+              <span class="text-muted text-small">Privacy-preserving activity metadata</span>
+            </div>
+            <span class="badge badge-green">Today</span>
+          </div>
+
+          <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px;">
+            <div style="display: flex; justify-content: space-between; font-size: 12px; padding: 6px 10px; background: rgba(16,185,129,0.1); border-left: 3px solid #10b981; border-radius: 6px;">
+              <span>08:00 AM — Deep Work / Code Review</span>
+              <span class="font-mono text-muted">80m (Productive)</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 12px; padding: 6px 10px; background: rgba(239,68,68,0.1); border-left: 3px solid #ef4444; border-radius: 6px;">
+              <span>09:20 AM — YouTube (Browsing)</span>
+              <span class="font-mono text-muted">15m (Distraction)</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 12px; padding: 6px 10px; background: rgba(99,102,241,0.1); border-left: 3px solid #6366f1; border-radius: 6px;">
+              <span>11:00 AM — Remote Focus Lockdown Session</span>
+              <span class="font-mono text-purple">60m (Focus)</span>
             </div>
           </div>
         </div>
       </section>
-    </main>
 
-    <!-- Modal 1: Policy Editor Modal -->
+      <!-- Section 9: Live Audit Ledger & Privacy Log -->
+      <section class="card">
+        <div class="card-title-row">
+          <div>
+            <h2 class="card-title">Live Audit Ledger & Security Event Stream</h2>
+            <span class="text-muted text-small">Transparent immutable record of policy actions and device events</span>
+          </div>
+          <button class="btn btn-sm btn-secondary" id="btn-refresh-audit">⟳ Refresh Ledger</button>
+        </div>
+        <div class="audit-list" id="audit-list-container">
+          <!-- Dynamically populated -->
+        </div>
+      </section>
+    </div>
+
+    <!-- VIEW B: MANAGED DEVICE VIEW -->
+    <div id="view-managed" class="view-panel" style="display: none;">
+      <section class="managed-banner-card">
+        <div class="managed-badge">🔒 MANAGED DEVICE</div>
+        <h1 class="managed-title">This device is protected by FocusGuard</h1>
+        <p class="managed-subtext">Policies are synchronized from your account owner and enforced locally via native OS shields.</p>
+      </section>
+
+      <section class="two-col-grid">
+        <div class="card">
+          <div class="card-title-row">
+            <h2 class="card-title">Active Local Policies</h2>
+            <span class="badge badge-purple">Enforced Locally</span>
+          </div>
+          <div class="policy-list" id="managed-policy-list">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title-row">
+            <h2 class="card-title">Enforcement & Permission Health</h2>
+            <span class="badge badge-green">Healthy</span>
+          </div>
+          <div class="permission-health-list">
+            <div class="health-item">
+              <div class="health-icon">🌐</div>
+              <div class="health-info">
+                <div class="health-title">VpnService Local DNS Sinkhole</div>
+                <div class="text-small text-muted">Drops blocked domain DNS queries (NXDOMAIN)</div>
+              </div>
+              <span class="badge badge-green">ACTIVE</span>
+            </div>
+            <div class="health-item">
+              <div class="health-icon">🛡️</div>
+              <div class="health-info">
+                <div class="health-title">UsageStats Foreground Tracker</div>
+                <div class="text-small text-muted">Local session normalizer & midnight splitter</div>
+              </div>
+              <span class="badge badge-green">OK</span>
+            </div>
+            <div class="health-item">
+              <div class="health-icon">⏱️</div>
+              <div class="health-info">
+                <div class="health-title">Offline Protection Cache</div>
+                <div class="text-small text-muted">Enforcement continues even when disconnected</div>
+              </div>
+              <span class="badge badge-green">READY</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Modal 1: Device Pairing Modal (6-char code & QR) -->
+    <div class="modal-overlay" id="modal-pair" style="display: none;">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3>Enroll New Device</h3>
+          <button class="btn-close" id="btn-close-pair-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="pairing-box">
+            <div class="pairing-label">6-CHARACTER PAIRING CODE</div>
+            <div class="pairing-code" id="display-pairing-code">FG-······</div>
+            <div class="pairing-timer text-small text-muted" id="display-pairing-timer">Valid for 5:00 minutes</div>
+          </div>
+          <div class="pairing-instructions">
+            <p><strong>On the managed device:</strong></p>
+            <ol>
+              <li>Install and open FocusGuard</li>
+              <li>Tap <em>"Join Existing Account"</em></li>
+              <li>Enter the pairing code above</li>
+              <li>Confirm requested permissions to begin protection</li>
+            </ol>
+          </div>
+          <div class="form-group mt-3">
+            <label>Device Name</label>
+            <input type="text" id="pair-device-name-input" class="form-control" value="Student Android Tablet">
+          </div>
+          <div class="form-group">
+            <label>Device Role</label>
+            <select id="pair-role-input" class="form-control">
+              <option value="MANAGED_USER" selected>Managed Device (Child / Student / Sub-node)</option>
+              <option value="PERSONAL">Personal Secondary Device</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btn-cancel-pair">Close</button>
+          <button class="btn btn-primary" id="btn-generate-code">Generate New Code</button>
+          <button class="btn btn-outline" id="btn-simulate-claim">Simulate Device Claim</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal 2: Policy Editor Modal -->
     <div class="modal-overlay" id="modal-policy" style="display: none;">
       <div class="modal-card">
         <div class="modal-header">
-          <h3>Create Attention Policy</h3>
+          <h3>Create Scoped Attention Policy</h3>
           <button class="btn-close" id="btn-close-policy-modal">&times;</button>
         </div>
         <div class="modal-body">
           <div class="form-group">
             <label>Policy Name</label>
-            <input type="text" id="policy-name-input" class="form-control" value="YouTube Daily Limit">
+            <input type="text" id="policy-name-input" class="form-control" value="YouTube Daily Budget">
           </div>
           <div class="form-group">
-            <label>Target Type</label>
+            <label>Target Category or Type</label>
             <select id="policy-target-type" class="form-control">
-              <option value="APP">Application (Bundle / Package Name)</option>
-              <option value="WEBSITE" selected>Website Domain</option>
-              <option value="CATEGORY">Category</option>
+              <option value="WEBSITE" selected>Website Domain (e.g. youtube.com, reddit.com)</option>
+              <option value="CATEGORY">Category (VIDEO, SOCIAL, GAMING)</option>
+              <option value="APP">Application (e.g. Discord, Slack, Steam)</option>
             </select>
           </div>
           <div class="form-group">
@@ -208,7 +493,7 @@
           <div class="form-row">
             <div class="form-group half">
               <label>Daily Budget (Minutes)</label>
-              <input type="number" id="policy-limit-input" class="form-control" value="30">
+              <input type="number" id="policy-limit-input" class="form-control" value="30" min="1" max="1440">
             </div>
             <div class="form-group half">
               <label>Enforcement Mode</label>
@@ -219,24 +504,33 @@
               </select>
             </div>
           </div>
+          <div class="form-group">
+            <label>Target Device Scope</label>
+            <select id="policy-device-scope" class="form-control">
+              <option value="ALL" selected>All Enrolled Devices (Shared Budget)</option>
+              <option value="MAC_ONLY">MacBook Pro Only</option>
+              <option value="MANAGED_ONLY">Managed Tablet Only</option>
+            </select>
+          </div>
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary" id="btn-cancel-policy">Cancel</button>
-          <button class="btn btn-primary" id="btn-save-policy">Save & Apply Policy</button>
+          <button class="btn btn-primary" id="btn-save-policy">Save & Dispatch Policy</button>
         </div>
       </div>
     </div>
 
-    <!-- Modal 2: Premium Block Screen Overlay -->
+    <!-- Modal 3: Native Lockout Screen Overlay -->
     <div class="modal-overlay blocker-overlay" id="modal-blocker" style="display: none;">
       <div class="blocker-card">
-        <div class="blocker-brand">FOCUSGUARD</div>
-        <h1 class="blocker-title">Time's up.</h1>
-        <p class="blocker-message">You used today's <strong>YouTube</strong> attention budget.</p>
-        <div class="blocker-badge">30 / 30 min</div>
-        <div class="blocker-reset">Next reset: 12:00 AM</div>
-        <p class="blocker-footer-note">Enforced by local OS Screen Time & VpnService policy engine.</p>
-        <button class="btn btn-secondary" id="btn-close-blocker">Dismiss Preview</button>
+        <div class="blocker-icon">🛡️</div>
+        <div class="blocker-brand">FOCUSGUARD ENFORCEMENT</div>
+        <h1 class="blocker-title">Attention Budget Exhausted</h1>
+        <p class="blocker-message" id="blocker-target-text">You reached today's limit for <strong>YouTube</strong>.</p>
+        <div class="blocker-badge" id="blocker-limit-badge">30m / 30m Limit Reached</div>
+        <div class="blocker-reset">Restrictions active across macOS & Android • Resets at 00:00 UTC</div>
+        <p class="blocker-footer-note">Enforced deterministically by local OS Screen Time & VpnService sinkhole.</p>
+        <button class="btn btn-secondary" id="btn-close-blocker">Dismiss Warning Overlay</button>
       </div>
     </div>
   </div>

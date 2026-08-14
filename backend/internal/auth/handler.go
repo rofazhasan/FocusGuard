@@ -31,8 +31,8 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
-	if req.Email == "" || len(req.Password) < 8 {
-		http.Error(w, `{"error":"Email required and password must be at least 8 characters"}`, http.StatusBadRequest)
+	if req.Email == "" || len(req.Password) < 6 {
+		http.Error(w, `{"error":"Email required and password must be at least 6 characters"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -48,9 +48,9 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 
 	if h.db != nil {
 		query := `INSERT INTO users (id, email, password_hash, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)`
-		_, err = h.db.ExecContext(r.Context(), query, userID, req.Email, hash, now, now)
+		_, err = h.db.ExecContext(r.Context(), query, userID.String(), req.Email, hash, now, now)
 		if err != nil {
-			if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique constraint") {
+			if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "UNIQUE constraint") || strings.Contains(err.Error(), "unique constraint") {
 				http.Error(w, `{"error":"User with this email already exists"}`, http.StatusConflict)
 				return
 			}
@@ -94,12 +94,12 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var userID uuid.UUID
+	var userIDStr string
 	var storedHash string
 
 	if h.db != nil {
 		query := `SELECT id, password_hash FROM users WHERE email = $1`
-		err := h.db.QueryRowContext(r.Context(), query, req.Email).Scan(&userID, &storedHash)
+		err := h.db.QueryRowContext(r.Context(), query, req.Email).Scan(&userIDStr, &storedHash)
 		if err == sql.ErrNoRows {
 			http.Error(w, `{"error":"Invalid credentials"}`, http.StatusUnauthorized)
 			return
@@ -114,7 +114,11 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		// Mock fallback for test environments without DB
+		userIDStr = uuid.New().String()
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
 		userID = uuid.New()
 	}
 

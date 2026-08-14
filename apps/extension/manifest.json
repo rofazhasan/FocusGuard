@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "FocusGuard — Attention Enforcement Engine",
+  "version": "1.0.0",
+  "description": "Production cross-platform attention management and policy enforcement extension.",
+  "permissions": [
+    "webNavigation",
+    "tabs",
+    "storage",
+    "idle",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "FocusGuard Status"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "pages/block.html",
+        "pages/block.css",
+        "pages/block.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
+}

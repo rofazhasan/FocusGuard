@@ -22,6 +22,10 @@ func Error(msg string, args ...any) {
 	Log.Error(msg, args...)
 }
 
+func Warn(msg string, args ...any) {
+	Log.Warn(msg, args...)
+}
+
 func Debug(msg string, args ...any) {
 	Log.Debug(msg, args...)
 }

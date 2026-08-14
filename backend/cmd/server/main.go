@@ -11,11 +11,17 @@ import (
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/google/uuid"
 
 	"github.com/focusguard/focusguard/backend/internal/analytics"
+	"github.com/focusguard/focusguard/backend/internal/audit"
 	"github.com/focusguard/focusguard/backend/internal/auth"
+	"github.com/focusguard/focusguard/backend/internal/collector"
+	"github.com/focusguard/focusguard/backend/internal/commands"
 	"github.com/focusguard/focusguard/backend/internal/devices"
+	"github.com/focusguard/focusguard/backend/internal/enrollment"
 	"github.com/focusguard/focusguard/backend/internal/events"
+	"github.com/focusguard/focusguard/backend/internal/focus"
 	"github.com/focusguard/focusguard/backend/internal/health"
 	"github.com/focusguard/focusguard/backend/internal/middleware"
 	"github.com/focusguard/focusguard/backend/internal/policies"
@@ -25,7 +31,7 @@ import (
 )
 
 func main() {
-	logger.Info("Starting FocusGuard Backend Server...")
+	logger.Info("Starting FocusGuard Multi-Device Production Server...")
 
 	// Environment configuration
 	port := os.Getenv("PORT")
@@ -37,7 +43,7 @@ func main() {
 		jwtSecret = "focusguard_super_secret_jwt_key_2026"
 	}
 
-	// Database setup (Optional gracefully handled if DB credentials not present in test mode)
+	// Database setup (Auto SQLite fallback if Postgres is absent)
 	dbHost := os.Getenv("DB_HOST")
 	dbPort := os.Getenv("DB_PORT")
 	dbUser := os.Getenv("DB_USER")
@@ -57,7 +63,7 @@ func main() {
 
 	db, err := database.Connect(dbConn)
 	if err != nil {
-		logger.Error("Proceeding without active database connection", "reason", err.Error())
+		logger.Error("Database connection warning", "error", err.Error())
 	} else if db != nil {
 		defer db.Close()
 	}
@@ -70,11 +76,51 @@ func main() {
 	go wsHub.Run()
 
 	analyticsHandler := analytics.NewHandler(db)
-
 	authHandler := auth.NewHandler(db, tokenService)
 	devicesHandler := devices.NewHandler(db)
-	policiesHandler := policies.NewHandler(db)
+	policiesHandler := policies.NewHandler(db, wsHub)
 	usageHandler := usage.NewHandler(db, policyEvaluator, wsHub)
+	focusHandler := focus.NewHandler(db, wsHub)
+	enrollmentHandler := enrollment.NewHandler(db, tokenService, wsHub)
+	commandsHandler := commands.NewHandler(db, wsHub)
+	auditHandler := audit.NewHandler(db)
+	protectionHandler := health.NewProtectionHandler(db, wsHub)
+
+	// Ensure default primary owner exists for instant zero-friction usability
+	defaultUserID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
+	defaultDeviceID := uuid.MustParse("00000000-0000-0000-0000-000000000002")
+	managedDeviceID := uuid.MustParse("00000000-0000-0000-0000-000000000004")
+	if db != nil {
+		pwHash, _ := auth.HashPassword("focusguard123")
+		_, _ = db.Exec(`INSERT INTO users (id, email, password_hash, created_at, updated_at)
+		                VALUES ($1, 'demo@focusguard.local', $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		                ON CONFLICT (id) DO NOTHING`, defaultUserID.String(), pwHash)
+
+		// Owner Mac
+		_, _ = db.Exec(`INSERT INTO devices (id, user_id, device_name, platform, os_version, role, is_managed, status, last_seen_at, created_at)
+		                VALUES ($1, $2, 'MacBook Pro 16"', 'MACOS', 'macOS 15.0', 'OWNER', 0, 'ONLINE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		                ON CONFLICT (id) DO NOTHING`, defaultDeviceID.String(), defaultUserID.String())
+
+		// Managed Student Tablet
+		_, _ = db.Exec(`INSERT INTO devices (id, user_id, device_name, platform, os_version, role, is_managed, status, last_seen_at, created_at)
+		                VALUES ($1, $2, 'Student Pixel Tablet', 'ANDROID', 'Android 15 (API 35)', 'MANAGED_USER', 1, 'ONLINE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		                ON CONFLICT (id) DO NOTHING`, managedDeviceID.String(), defaultUserID.String())
+
+		// Default initial policy: YouTube 30m limit
+		defaultPolicyID := uuid.MustParse("00000000-0000-0000-0000-000000000003")
+		_, _ = db.Exec(`INSERT INTO policies (id, user_id, name, limit_seconds, period, timezone, enforcement_mode, is_enabled, version, created_at, updated_at)
+		                VALUES ($1, $2, 'YouTube Daily Budget', 1800, 'DAILY', 'UTC', 'BLOCK', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		                ON CONFLICT (id) DO NOTHING`, defaultPolicyID.String(), defaultUserID.String())
+
+		_, _ = db.Exec(`INSERT INTO policy_targets (id, policy_id, target_type, target_value, created_at)
+		                VALUES ($1, $2, 'WEBSITE', 'youtube.com', CURRENT_TIMESTAMP)
+		                ON CONFLICT (id) DO NOTHING`, uuid.New().String(), defaultPolicyID.String())
+	}
+
+	// Real macOS Background Activity Collector
+	activityCollector := collector.NewActivityCollector(db, policyEvaluator, wsHub, defaultUserID, defaultDeviceID)
+	activityCollector.Start()
+	defer activityCollector.Stop()
 
 	// HTTP Router (Chi)
 	r := chi.NewRouter()
@@ -96,6 +142,7 @@ func main() {
 	r.Get("/health", health.Handler)
 	r.Post("/api/v1/auth/register", authHandler.Register)
 	r.Post("/api/v1/auth/login", authHandler.Login)
+	r.Post("/api/v1/enrollment/claim", enrollmentHandler.ClaimEnrollment)
 
 	// Real-Time WebSocket Endpoint
 	r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -109,14 +156,29 @@ func main() {
 		r.Post("/api/v1/devices/register", devicesHandler.RegisterDevice)
 		r.Get("/api/v1/devices", devicesHandler.ListDevices)
 
+		r.Post("/api/v1/enrollment/create", enrollmentHandler.CreateEnrollment)
+		r.Get("/api/v1/enrollment/pending", enrollmentHandler.ListPendingEnrollments)
+
 		r.Post("/api/v1/policies", policiesHandler.CreatePolicy)
 		r.Get("/api/v1/policies", policiesHandler.ListPolicies)
 		r.Delete("/api/v1/policies/{id}", policiesHandler.DeletePolicy)
+		r.Post("/api/v1/policies/simulate", policiesHandler.SimulatePolicy)
+		r.Post("/api/v1/policies/explain", policiesHandler.ExplainPolicy)
+
+		r.Post("/api/v1/commands/dispatch", commandsHandler.DispatchCommand)
+		r.Get("/api/v1/audit/logs", auditHandler.GetAuditLogs)
 
 		r.Post("/api/v1/usage/sync", usageHandler.SyncUsage)
 
 		r.Get("/api/v1/analytics/daily", analyticsHandler.GetDailyAnalytics)
 		r.Get("/api/v1/analytics/weekly", analyticsHandler.GetWeeklyAnalytics)
+		r.Get("/api/v1/analytics/timeline", analyticsHandler.GetTimeline)
+
+		r.Get("/api/v1/health/fleet", protectionHandler.GetFleetHealth)
+		r.Post("/api/v1/health/tamper", protectionHandler.ReportTamperEvent)
+
+		r.Post("/api/v1/focus/start", focusHandler.StartFocus)
+		r.Post("/api/v1/focus/end", focusHandler.EndFocus)
 	})
 
 	server := &http.Server{
@@ -128,7 +190,7 @@ func main() {
 	}
 
 	go func() {
-		logger.Info("FocusGuard Server running", "port", port)
+		logger.Info("FocusGuard Multi-Device Server running", "port", port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("Server error", "error", err)
 		}

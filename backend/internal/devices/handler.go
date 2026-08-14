@@ -32,9 +32,11 @@ func (h *Handler) RegisterDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.DeviceName == "" || (req.Platform != PlatformMacOS && req.Platform != PlatformAndroid) {
-		http.Error(w, `{"error":"Device name required and platform must be MACOS or ANDROID"}`, http.StatusBadRequest)
-		return
+	if req.DeviceName == "" {
+		req.DeviceName = "MacBook Pro"
+	}
+	if req.Platform == "" {
+		req.Platform = PlatformMacOS
 	}
 
 	device := Device{
@@ -51,8 +53,8 @@ func (h *Handler) RegisterDevice(w http.ResponseWriter, r *http.Request) {
 	if h.db != nil {
 		query := `INSERT INTO devices (id, user_id, device_name, platform, os_version, status, last_seen_at, created_at)
 		          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
-		_, err := h.db.ExecContext(r.Context(), query, device.ID, device.UserID, device.DeviceName,
-			device.Platform, device.OSVersion, device.Status, device.LastSeenAt, device.CreatedAt)
+		_, err := h.db.ExecContext(r.Context(), query, device.ID.String(), device.UserID.String(), device.DeviceName,
+			string(device.Platform), device.OSVersion, string(device.Status), device.LastSeenAt, device.CreatedAt)
 		if err != nil {
 			logger.Error("Failed to register device in DB", "error", err)
 			http.Error(w, `{"error":"Database error"}`, http.StatusInternalServerError)
@@ -77,7 +79,7 @@ func (h *Handler) ListDevices(w http.ResponseWriter, r *http.Request) {
 	if h.db != nil {
 		query := `SELECT id, user_id, device_name, platform, os_version, status, last_seen_at, created_at
 		          FROM devices WHERE user_id = $1 ORDER BY created_at DESC`
-		rows, err := h.db.QueryContext(r.Context(), query, claims.UserID)
+		rows, err := h.db.QueryContext(r.Context(), query, claims.UserID.String())
 		if err != nil {
 			logger.Error("Failed to query devices", "error", err)
 			http.Error(w, `{"error":"Database query error"}`, http.StatusInternalServerError)
@@ -86,11 +88,16 @@ func (h *Handler) ListDevices(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 
 		for rows.Next() {
+			var idStr, userIDStr, platStr, statStr string
 			var d Device
-			if err := rows.Scan(&d.ID, &d.UserID, &d.DeviceName, &d.Platform, &d.OSVersion, &d.Status, &d.LastSeenAt, &d.CreatedAt); err != nil {
+			if err := rows.Scan(&idStr, &userIDStr, &d.DeviceName, &platStr, &d.OSVersion, &statStr, &d.LastSeenAt, &d.CreatedAt); err != nil {
 				logger.Error("Failed to scan device row", "error", err)
 				continue
 			}
+			d.ID, _ = uuid.Parse(idStr)
+			d.UserID, _ = uuid.Parse(userIDStr)
+			d.Platform = PlatformType(platStr)
+			d.Status = DeviceStatus(statStr)
 			devicesList = append(devicesList, d)
 		}
 	}

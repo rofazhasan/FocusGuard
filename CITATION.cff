@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use or research FocusGuard in academic work, please cite it as below."
+title: "FocusGuard: A Consent-Based, Cross-Device Attention Enforcement and Digital Wellbeing Platform"
+authors:
+  - family-names: "Hasan"
+    given-names: "Md. Rofaz"
+    affiliation: "Rajshahi University of Engineering & Technology (RUET)"
+  - name: "FocusGuard Engineering Team"
+    affiliation: "Department of Computer Science & Engineering, RUET"
+version: 1.0.0
+date-released: 2026-08-14
+repository-code: "https://github.com/rofazhasan/FocusGuard"
+license: Apache-2.0
+keywords:
+  - "digital wellbeing"
+  - "screen time"
+  - "attention management"
+  - "cross-device policy enforcement"
+  - "RFC 1035 DNS sinkhole"
+  - "Apple ScreenTime ManagedSettings"
+  - "distributed policy engine"

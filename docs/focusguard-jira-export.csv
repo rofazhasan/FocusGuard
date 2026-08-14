@@ -1,36 +1,42 @@
 Issue Type,Summary,Description,Priority,Labels,Epic Name,Epic Link
-Epic,"EPIC 1: Platform Foundation & Infrastructure","Establish monorepo structure, Docker environment, PostgreSQL migrations, and OpenAPI 3.0 contracts.",High,infra,Platform Foundation & Infrastructure,
-Task,"FG-101: Setup monorepo folder structure & Docker Compose environment","Initialize apps/macos, apps/android, backend, packages, docs, and docker-compose.yml.",High,infra,,Platform Foundation & Infrastructure
-Task,"FG-102: Create PostgreSQL database schema & migration DDL scripts","Implement init.sql with users, devices, policies, policy_targets, usage_aggregates, and blocked_events tables.",High,database,,Platform Foundation & Infrastructure
-Task,"FG-103: Define OpenAPI 3.0 API Specification & contract definitions","Create openapi.yaml covering auth, devices, policies, usage sync, and health endpoints.",High,api,,Platform Foundation & Infrastructure
-Epic,"EPIC 2: Backend Microservices & API","Implement Go backend HTTP services, JWT authentication, policy CRUD, and usage sync handlers.",High,backend,Backend Microservices & API,
-Story,"FG-201: Implement Auth service (JWT registration, login, refresh)","Develop password hashing with bcrypt, JWT access and refresh token generation, and auth endpoints.",High,auth,,Backend Microservices & API
-Story,"FG-202: Implement Device management service","Implement POST /devices/register and GET /devices endpoints for macOS and Android nodes.",Medium,devices,,Backend Microservices & API
-Story,"FG-203: Implement Policy CRUD service with versioning","Develop policy creation, listing, updating, and deletion endpoints with optimistic version counters.",High,policies,,Backend Microservices & API
-Story,"FG-204: Implement Usage aggregation endpoint with idempotent session processing","Implement POST /usage/sync with daily duration upserts and cross-device total limit checks.",High,usage,,Backend Microservices & API
-Epic,"EPIC 3: macOS Client & Screen Time Integration","Develop native macOS SwiftUI client, FamilyControls authorization, DeviceActivity monitoring, and ManagedSettings shielding.",High,macos,macOS Client & Screen Time Integration,
-Story,"FG-301: Create SwiftUI Application architecture & SwiftData models","Build main DashboardView, navigation shell, and SwiftData local persistence models.",High,macos,,macOS Client & Screen Time Integration
-Story,"FG-302: Implement FamilyControls authorization request workflow","Request user authorization via AuthorizationCenter.shared.requestAuthorization for Screen Time APIs.",High,macos,,macOS Client & Screen Time Integration
-Story,"FG-303: Implement DeviceActivityMonitor extension for local threshold triggers","Create out-of-process DeviceActivityMonitorExtension to trigger local shields when thresholds are hit.",High,macos,,macOS Client & Screen Time Integration
-Story,"FG-304: Implement ManagedSettings custom Shield extensions","Apply ManagedSettingsStore shields to blocked apps/webDomains and implement custom ShieldConfigurationExtension UI.",High,macos,,macOS Client & Screen Time Integration
-Epic,"EPIC 4: Android Client & Enforcement Subsystem","Develop native Android Jetpack Compose app, Room database, UsageStatsManager tracking, VpnService DNS sinkhole, and lock overlay.",High,android,Android Client & Enforcement Subsystem,
-Story,"FG-401: Create Jetpack Compose UI architecture & Room local database","Build DashboardScreen with dark mode design, Room DB entities, DAOs, and database migrations.",High,android,,Android Client & Enforcement Subsystem
-Story,"FG-402: Implement UsageStatsManager tracking service","Implement foreground service listening to UsageEvents and calculating active app duration.",High,android,,Android Client & Enforcement Subsystem
-Story,"FG-403: Implement VpnService local DNS filter for website blocking","Build FocusVpnService TUN interface returning NXDOMAIN for blocked domains without remote proxying.",High,android,,Android Client & Enforcement Subsystem
-Story,"FG-404: Implement full-screen lock overlay UI for app enforcement","Display immutable overlay lock activity when daily app budget limit is hit.",High,android,,Android Client & Enforcement Subsystem
-Epic,"EPIC 5: Cross-Device Synchronization Engine","Build WebSocket broadcast hub and client synchronization engines for real-time limit triggers.",High,sync,Cross-Device Synchronization Engine,
-Story,"FG-501: Implement Go WebSocket broadcast hub","Develop WebSocket event hub in Go supporting client connections and broadcasting LIMIT_REACHED events.",High,sync,,Cross-Device Synchronization Engine
-Story,"FG-502: Implement macOS WebSocket client & offline delta sync queue","Build Swift WebSocket listener and local queue for offline session replay on reconnection.",High,sync,,Cross-Device Synchronization Engine
-Story,"FG-503: Implement Android WorkManager sync worker & reconnection logic","Implement periodic WorkManager sync task with exponential backoff for offline resilience.",High,sync,,Cross-Device Synchronization Engine
-Story,"FG-504: Implement server-side cross-device usage limit calculator","Calculate combined usage across macOS and Android devices in real-time.",High,sync,,Cross-Device Synchronization Engine
-Epic,"EPIC 6: Analytics & Focus Sessions","Implement timed Focus Sessions mode and executive analytics charts.",Medium,analytics,Analytics & Focus Sessions,
-Story,"FG-601: Implement Focus Session countdown engine (macOS & Android)","Build on-demand focus session timer (15/30/45/60 mins) activating shields instantly.",Medium,focus,,Analytics & Focus Sessions
-Story,"FG-602: Implement Backend Analytics aggregation queries","Implement GET /analytics/daily and GET /analytics/weekly endpoints.",Medium,analytics,,Analytics & Focus Sessions
-Story,"FG-603: Build UI Analytics dashboards with native charts","Render top distraction apps, budget adherence trends, and device status cards.",Medium,analytics,,Analytics & Focus Sessions
-Epic,"EPIC 7: Security & Anti-Tamper Engine","Implement system monotonic clock validation and secure token storage.",High,security,Security & Anti-Tamper Engine,
-Story,"FG-701: Implement Monotonic clock validation & tampering detector","Compare wall-clock elapsed time against CLOCK_MONOTONIC / SystemClock.elapsedRealtime() to prevent clock tampering.",High,security,,Security & Anti-Tamper Engine
-Story,"FG-702: Secure token storage (Keychain & Android Keystore integration)","Store JWT access and refresh tokens in Apple Keychain Services and Android Keystore HSM.",High,security,,Security & Anti-Tamper Engine
-Epic,"EPIC 8: Quality Assurance & E2E Testing","Develop automated unit, API integration, and cross-device end-to-end test suites.",High,testing,Quality Assurance & E2E Testing,
-Task,"FG-801: Write Go integration tests for API endpoints","Implement integration test suite for auth, policies, and usage endpoints.",High,testing,,Quality Assurance & E2E Testing
-Task,"FG-802: Write macOS XCTest unit tests for Policy Engine","Implement XCTest suite for LocalPolicyEvaluator and SwiftData models.",High,testing,,Quality Assurance & E2E Testing
-Task,"FG-803: Write Android JUnit/Espresso tests for Room & Usage Engine","Implement JUnit tests for AndroidPolicyEvaluator, Room DAO, and Compose UI components.",High,testing,,Quality Assurance & E2E Testing
+Epic,"FG-ENF Browser Enforcement","Production WebExtensions-compatible browser extension (Chrome, Edge, Firefox) with domain/URL matching, idle detection, and block page.",High,extension,FG-ENF Browser Enforcement,
+Task,"FG-101: WebExtensions Shared Core Architecture","Develop shared extension core in apps/extension/core/ supporting Manifest V3 for Chrome, Edge, and Firefox.",High,extension,,FG-ENF Browser Enforcement
+Task,"FG-102: Hostname-Aware Domain Matcher","Implement strict hostname-aware domain normalizer, subdomain matcher, and URL pattern engine without insecure includes.",High,extension,,FG-ENF Browser Enforcement
+Task,"FG-103: FocusGuard Block Page & Interceptor","Build high-fidelity block page (pages/block.html) with attention budget counters, reason, next reset, and Return to Focus button.",High,extension,,FG-ENF Browser Enforcement
+Epic,"FG-ENF Android Enforcement","Native Android enforcement via UsageStatsManager, overlay lock screen, and system permission management.",High,android,FG-ENF Android Enforcement,
+Story,"FG-201: Android Jetpack Compose UI & Room Database","Build dark mode dashboard, attention budget rings, Room DB schema, and DAOs.",High,android,,FG-ENF Android Enforcement
+Story,"FG-202: UsageStatsManager Foreground Activity Tracking","Implement event-based usage tracking service querying Android UsageEvents.",High,android,,FG-ENF Android Enforcement
+Story,"FG-203: Immutable Full-Screen Lock Overlay","Display immutable overlay lock activity when daily attention budget limit is exhausted.",High,android,,FG-ENF Android Enforcement
+Epic,"FG-ENF macOS Enforcement","Native macOS Screen Time, FamilyControls authorization, DeviceActivity schedule monitoring, and ManagedSettings shields.",High,macos,FG-ENF macOS Enforcement,
+Story,"FG-301: macOS SwiftUI Navigation & SwiftData Models","Build native macOS application shell, attention budget hero card, and SwiftData local store.",High,macos,,FG-ENF macOS Enforcement
+Story,"FG-302: FamilyControls Authorization Workflow","Implement AuthorizationCenter.shared.requestAuthorization for native Screen Time access.",High,macos,,FG-ENF macOS Enforcement
+Story,"FG-303: ManagedSettings Custom Shield Extension","Apply native ManagedSettingsStore shields with custom ShieldConfigurationExtension UI.",High,macos,,FG-ENF macOS Enforcement
+Epic,"FG-ENF Network Engine","Android VpnService local DNS sinkhole, Trie-based DomainPolicyCache, and application-aware network decisions.",High,vpn,FG-ENF Network Engine,
+Story,"FG-401: VpnService Local DNS Sinkhole","Build local TUN interface intercepting UDP port 53 DNS queries and returning NXDOMAIN for blocked domains.",High,vpn,,FG-ENF Network Engine
+Story,"FG-402: Trie-based DomainPolicyCache","Develop high-performance O(k) reverse-label Trie cache with deterministic precedence (Allow > Block).",High,vpn,,FG-ENF Network Engine
+Story,"FG-403: Application-Aware Network Decision Engine","Map package bundle IDs to outbound hostnames for application-specific network cutoff upon limit exhaustion.",Medium,vpn,,FG-ENF Network Engine
+Epic,"FG-ENF Policy Engine","Shared multi-target policy engine, budget calculation, progressive warnings, policy simulator, and explainer.",High,policy,FG-ENF Policy Engine,
+Story,"FG-501: Shared Policy Model & Evaluator","Define multi-target (DOMAIN, APP, CATEGORY, URL) and multi-rule (BLOCK, ALLOW, TIME_LIMIT, FOCUS_ONLY) evaluation.",High,policy,,FG-ENF Policy Engine
+Story,"FG-502: Progressive Warning Thresholds","Calculate allocated, consumed, and remaining attention budgets with warnings at 80%, 90%, and 100%.",High,policy,,FG-ENF Policy Engine
+Story,"FG-503: Policy Simulator & Conflict Detector","Implement dry-run policy simulator detecting rule conflicts and explaining deterministic precedence.",High,policy,,FG-ENF Policy Engine
+Story,"FG-504: Policy Explainer (Why Blocked?)","Provide automated inspection explaining why any domain is restricted, category, and enforcing layer.",Medium,policy,,FG-ENF Policy Engine
+Epic,"FG-ENF Usage Detection","Active visibility time algorithm, idle detection, tab switching, and midnight session partitioning.",High,usage,FG-ENF Usage Detection,
+Story,"FG-601: Active Visibility Time & 60s Idle Detector","Track active visibility time with tab activation, window focus, minimization, and 60s idle threshold.",High,usage,,FG-ENF Usage Detection
+Story,"FG-602: Session State Machine","Implement robust state machine transitions: UNKNOWN -> ACTIVE -> IDLE -> PAUSED -> ENDED.",High,usage,,FG-ENF Usage Detection
+Story,"FG-603: Midnight Session Partitioner","Normalize raw usage intervals crossing 00:00 UTC into distinct daily aggregation records.",Medium,usage,,FG-ENF Usage Detection
+Epic,"FG-ENF Synchronization","Real-time WebSocket hub, monotonic policy versioning, offline queue, and cross-device shared budget.",High,sync,FG-ENF Synchronization,
+Story,"FG-701: Go WebSocket Broadcast Hub","Develop Gorilla WebSocket broadcast hub for live LIMIT_REACHED and FOCUS_STARTED events.",High,sync,,FG-ENF Synchronization
+Story,"FG-702: Monotonic Policy Versioning & Offline Cache","Guarantee offline enforcement via local cache; resolve sync conflicts with monotonic versioning.",High,sync,,FG-ENF Synchronization
+Story,"FG-703: Cross-Device Shared Attention Budget","Aggregate cumulative usage across Mac, Android, and Extension in real-time triggering simultaneous fleet shields.",High,sync,,FG-ENF Synchronization
+Epic,"FG-ENF Analytics","Attention score algorithm, daily visual timeline, weekly distraction trends, and productivity reports.",Medium,analytics,FG-ENF Analytics,
+Story,"FG-801: Transparent Attention Score Calculator","Calculate 0-100 score based on focus completion, limit adherence, distraction deduction, and shields.",Medium,analytics,,FG-ENF Analytics
+Story,"FG-802: Daily Visual Activity Timeline","Generate privacy-preserving timeline blocks showing productive hours, focus sessions, and top distractions.",Medium,analytics,,FG-ENF Analytics
+Story,"FG-803: Weekly Trends & Distraction Breakdown","Aggregate weekly usage trends and distraction app rankings.",Medium,analytics,,FG-ENF Analytics
+Epic,"FG-ENF Security","Monotonic clock anti-tamper validation, secure hardware-backed storage, and tamper state telemetry.",High,security,FG-ENF Security,
+Story,"FG-901: Monotonic Clock Anti-Tamper Detector","Compare wall-clock elapsed time against CLOCK_MONOTONIC_RAW / elapsedRealtime() to catch clock manipulation.",High,security,,FG-ENF Security
+Story,"FG-902: Secure Token Storage (Keychain / Keystore)","Integrate Apple Keychain Services and Android Keystore HSM for JWT and credential storage.",High,security,,FG-ENF Security
+Story,"FG-903: Fleet Protection Health & Tamper Telemetry","Broadcast PROTECTION DEGRADED alerts on VPN stop, extension disable, or permission revocation.",High,security,,FG-ENF Security
+Epic,"FG-ENF Testing","Comprehensive unit, integration, proof harness, and end-to-end multi-device verification test suites.",High,testing,FG-ENF Testing,
+Task,"FG-1001: Go Backend Test Suite","Automated unit and API integration tests covering auth, devices, policies, simulator, health, and usage sync.",High,testing,,FG-ENF Testing
+Task,"FG-1002: Browser Extension Core Test Suite","Automated tests for domain normalizer, subdomain matcher, URL patterns, session tracker, and policy engine.",High,testing,,FG-ENF Testing
+Task,"FG-1003: Native Platform Proof Harnesses","Automated macOS Swift Proof A and Android Go Proof B validating real Screen Time & VPN DNS sinkhole pipelines.",High,testing,,FG-ENF Testing

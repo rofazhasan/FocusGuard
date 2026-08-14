@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FocusGuard — Site Unavailable</title>
+  <link rel="stylesheet" href="block.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="block-card">
+    <div class="shield-badge">
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        <path d="m9 12 2 2 4-4"/>
+      </svg>
+    </div>
+
+    <div class="brand-title">FOCUSGUARD</div>
+    <h1 class="headline">This site is currently unavailable.</h1>
+
+    <div class="reason-container">
+      <div class="reason-label">Reason</div>
+      <div class="reason-value" id="block-reason">Daily attention budget reached.</div>
+    </div>
+
+    <div class="details-box">
+      <div class="detail-row">
+        <span class="detail-label">Restricted Target:</span>
+        <span class="detail-val font-bold" id="blocked-target">youtube.com</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Budget Ratio:</span>
+        <span class="detail-val font-mono" id="budget-ratio">30 / 30 minutes</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Policy Scope:</span>
+        <span class="detail-val" id="policy-scope">Daily Entertainment Limit</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Next Reset:</span>
+        <span class="detail-val font-mono text-purple" id="next-reset">12:00 AM</span>
+      </div>
+    </div>
+
+    <div class="action-row">
+      <button class="btn btn-primary" id="btn-return-focus">Return to Focus</button>
+      <button class="btn btn-secondary" id="btn-view-policy">View Policy</button>
+    </div>
+
+    <div class="footer-note">
+      FocusGuard is actively enforcing attention policies across your registered devices.
+    </div>
+  </div>
+
+  <script src="block.js"></script>
+</body>
+</html>
