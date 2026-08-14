@@ -1,3 +1,8 @@
+# Build Artifacts & Distribution
+dist/
+.pids/
+*.zip
+
 # Go
 backend/bin/
 backend/dist/
