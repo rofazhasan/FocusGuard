@@ -1,0 +1,105 @@
+/**
+ * FocusGuard Shared Types Package
+ * Single source of truth for entity types across apps and services.
+ */
+
+// Target Types
+const TargetType = {
+  APP: 'APP',
+  DOMAIN: 'DOMAIN',
+  CATEGORY: 'CATEGORY',
+  URL: 'URL',
+  DEVICE: 'DEVICE',
+  DEVICE_GROUP: 'DEVICE_GROUP'
+};
+
+// Action Types
+const ActionType = {
+  ALLOW: 'ALLOW',
+  BLOCK: 'BLOCK',
+  TIME_LIMIT: 'TIME_LIMIT',
+  SCHEDULE: 'SCHEDULE',
+  FOCUS: 'FOCUS',
+  NETWORK_BLOCK: 'NETWORK_BLOCK',
+  APP_LIMIT: 'APP_LIMIT'
+};
+
+// Pairing States
+const PairingState = {
+  UNPAIRED: 'UNPAIRED',
+  PAIRING: 'PAIRING',
+  PENDING_APPROVAL: 'PENDING_APPROVAL',
+  PAIRED: 'PAIRED',
+  ACTIVE: 'ACTIVE',
+  OFFLINE: 'OFFLINE',
+  REVOKED: 'REVOKED',
+  BLOCKED: 'BLOCKED',
+  UNTRUSTED: 'UNTRUSTED'
+};
+
+// Protection States
+const ProtectionState = {
+  PROTECTED: 'PROTECTED',
+  DEGRADED: 'DEGRADED',
+  OFFLINE: 'OFFLINE',
+  PERMISSION_REQUIRED: 'PERMISSION_REQUIRED',
+  POLICY_OUTDATED: 'POLICY_OUTDATED',
+  REVOKED: 'REVOKED',
+  ERROR: 'ERROR'
+};
+
+// Platforms
+const Platform = {
+  WINDOWS: 'WINDOWS',
+  MACOS: 'MACOS',
+  ANDROID: 'ANDROID',
+  BROWSER: 'BROWSER'
+};
+
+// Event Types
+const EventType = {
+  DEVICE_ENROLLED: 'DEVICE_ENROLLED',
+  DEVICE_ONLINE: 'DEVICE_ONLINE',
+  DEVICE_OFFLINE: 'DEVICE_OFFLINE',
+  POLICY_CREATED: 'POLICY_CREATED',
+  POLICY_UPDATED: 'POLICY_UPDATED',
+  POLICY_APPLIED: 'POLICY_APPLIED',
+  APP_SESSION_STARTED: 'APP_SESSION_STARTED',
+  APP_SESSION_ENDED: 'APP_SESSION_ENDED',
+  DOMAIN_BLOCKED: 'DOMAIN_BLOCKED',
+  APP_LIMIT_REACHED: 'APP_LIMIT_REACHED',
+  FOCUS_STARTED: 'FOCUS_STARTED',
+  FOCUS_ENDED: 'FOCUS_ENDED',
+  PERMISSION_CHANGED: 'PERMISSION_CHANGED',
+  PROTECTION_DEGRADED: 'PROTECTION_DEGRADED',
+  DEVICE_REVOKED: 'DEVICE_REVOKED'
+};
+
+// Decision Types
+const DecisionType = {
+  ALLOW: 'ALLOW',
+  BLOCK: 'BLOCK',
+  WARN: 'WARN'
+};
+
+// Remote Commands
+const RemoteCommandType = {
+  START_FOCUS: 'START_FOCUS',
+  STOP_FOCUS: 'STOP_FOCUS',
+  UPDATE_POLICY: 'UPDATE_POLICY',
+  SYNC_POLICY: 'SYNC_POLICY',
+  REQUEST_STATUS: 'REQUEST_STATUS',
+  REQUEST_DIAGNOSTICS: 'REQUEST_DIAGNOSTICS',
+  REVOKE_DEVICE: 'REVOKE_DEVICE'
+};
+
+module.exports = {
+  TargetType,
+  ActionType,
+  PairingState,
+  ProtectionState,
+  Platform,
+  EventType,
+  DecisionType,
+  RemoteCommandType
+};

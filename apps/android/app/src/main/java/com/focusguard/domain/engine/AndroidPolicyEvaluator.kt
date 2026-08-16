@@ -48,7 +48,7 @@ object AndroidPolicyEvaluator {
                 state = EvaluationResultState.EXHAUSTED_BLOCK,
                 reason = "Daily attention budget reached.",
                 remainingSeconds = 0,
-                percentageUsed: percentage
+                percentageUsed = percentage
             )
             percentage >= 90 -> PolicyEvaluationResult(
                 state = EvaluationResultState.WARNING_90,

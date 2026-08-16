@@ -26,17 +26,31 @@ class DNRPolicyCompiler {
     let ruleId = 1;
 
     for (const policy of policies || []) {
-      if (!policy.isEnabled) continue;
+      if (policy.isEnabled === false) continue;
 
-      const isAllow = policy.enforcementMode === 'ALLOW';
-      const limitSeconds = policy.limitSeconds || 0;
+      const isAllow = policy.enforcementMode === 'ALLOW' || policy.action === 'ALLOW';
+      const limitSeconds = policy.limitSeconds || policy.limit || 0;
       const priority = isAllow ? 100 : (policy.priority || 50);
 
-      for (const target of policy.targets || []) {
+      // Normalize targets: handle either targets array or single target property
+      let targets = policy.targets;
+      if (!targets || !Array.isArray(targets)) {
+        if (policy.target) {
+          targets = [{ targetType: policy.targetType || 'DOMAIN', targetValue: policy.target }];
+        } else if (policy.targetValue) {
+          targets = [{ targetType: policy.targetType || 'DOMAIN', targetValue: policy.targetValue }];
+        } else {
+          targets = [];
+        }
+      }
+
+      for (const target of targets) {
         let domain = '';
-        if (target.targetType === 'WEBSITE' || target.targetType === 'DOMAIN') {
-          domain = target.targetValue.trim().toLowerCase().replace(/^www\./, '');
-        } else if (target.targetType === 'CATEGORY') {
+        const targetType = target.targetType || 'DOMAIN';
+        const targetValue = target.targetValue || target.target || '';
+        if (targetType === 'WEBSITE' || targetType === 'DOMAIN') {
+          domain = targetValue.trim().toLowerCase().replace(/^www\./, '');
+        } else if (targetType === 'CATEGORY') {
           // Category compilation expanded below
           continue;
         }
@@ -45,7 +59,7 @@ class DNRPolicyCompiler {
 
         // If time-limited, only enforce DNR block if usage meets or exceeds limit
         if (!isAllow && limitSeconds > 0) {
-          const usedSec = todayUsage[domain] || todayUsage[target.targetValue] || 0;
+          const usedSec = todayUsage[domain] || todayUsage[targetValue] || 0;
           if (usedSec < limitSeconds) {
             continue; // Under budget; evaluated by background active tracker
           }
