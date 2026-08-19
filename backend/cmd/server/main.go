@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -89,32 +91,29 @@ func main() {
 	// Ensure default primary owner exists for instant zero-friction usability
 	defaultUserID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 	defaultDeviceID := uuid.MustParse("00000000-0000-0000-0000-000000000002")
-	managedDeviceID := uuid.MustParse("00000000-0000-0000-0000-000000000004")
 	if db != nil {
 		pwHash, _ := auth.HashPassword("focusguard123")
 		_, _ = db.Exec(`INSERT INTO users (id, email, password_hash, created_at, updated_at)
 		                VALUES ($1, 'demo@focusguard.local', $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		                ON CONFLICT (id) DO NOTHING`, defaultUserID.String(), pwHash)
 
-		// Owner Mac
+		// Real Local Host Device
+		hostName, err := os.Hostname()
+		if err != nil || hostName == "" {
+			hostName = "MacBook Pro"
+		}
+		platform := "MACOS"
+		if runtime.GOOS == "windows" {
+			platform = "WINDOWS"
+		} else if runtime.GOOS == "linux" {
+			platform = "LINUX"
+		}
+
+		osVer := fmt.Sprintf("%s (%s)", runtime.GOOS, runtime.GOARCH)
+
 		_, _ = db.Exec(`INSERT INTO devices (id, user_id, device_name, platform, os_version, role, is_managed, status, last_seen_at, created_at)
-		                VALUES ($1, $2, 'MacBook Pro 16"', 'MACOS', 'macOS 15.0', 'OWNER', 0, 'ONLINE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-		                ON CONFLICT (id) DO NOTHING`, defaultDeviceID.String(), defaultUserID.String())
-
-		// Managed Student Tablet
-		_, _ = db.Exec(`INSERT INTO devices (id, user_id, device_name, platform, os_version, role, is_managed, status, last_seen_at, created_at)
-		                VALUES ($1, $2, 'Student Pixel Tablet', 'ANDROID', 'Android 15 (API 35)', 'MANAGED_USER', 1, 'ONLINE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-		                ON CONFLICT (id) DO NOTHING`, managedDeviceID.String(), defaultUserID.String())
-
-		// Default initial policy: YouTube 30m limit
-		defaultPolicyID := uuid.MustParse("00000000-0000-0000-0000-000000000003")
-		_, _ = db.Exec(`INSERT INTO policies (id, user_id, name, limit_seconds, period, timezone, enforcement_mode, is_enabled, version, created_at, updated_at)
-		                VALUES ($1, $2, 'YouTube Daily Budget', 1800, 'DAILY', 'UTC', 'BLOCK', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-		                ON CONFLICT (id) DO NOTHING`, defaultPolicyID.String(), defaultUserID.String())
-
-		_, _ = db.Exec(`INSERT INTO policy_targets (id, policy_id, target_type, target_value, created_at)
-		                VALUES ($1, $2, 'WEBSITE', 'youtube.com', CURRENT_TIMESTAMP)
-		                ON CONFLICT (id) DO NOTHING`, uuid.New().String(), defaultPolicyID.String())
+		                VALUES ($1, $2, $3, $4, $5, 'OWNER', 0, 'ONLINE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		                ON CONFLICT (id) DO NOTHING`, defaultDeviceID.String(), defaultUserID.String(), hostName, platform, osVer)
 	}
 
 	// Real macOS Background Activity Collector

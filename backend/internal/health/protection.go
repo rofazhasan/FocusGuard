@@ -153,23 +153,6 @@ func (h *ProtectionHandler) GetFleetHealth(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	if len(fleet) == 0 {
-		// Default demo device health state
-		fleet = append(fleet, DeviceHealthStatus{
-			DeviceID:             "00000000-0000-0000-0000-000000000002",
-			DeviceName:           "MacBook Pro 16\"",
-			Platform:             "MACOS",
-			Status:               "ONLINE",
-			ProtectionState:      "ACTIVE",
-			ProtectionScore:      100,
-			IsVpnActive:          true,
-			IsExtensionActive:    true,
-			IsUsageAccessActive:  true,
-			IsPolicySynchronized: true,
-			LastSeen:             time.Now().UTC().Format(time.RFC3339),
-		})
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(fleet)

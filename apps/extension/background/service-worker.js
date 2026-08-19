@@ -21,6 +21,42 @@ const policyCache = new PolicyCache();
 const policyEngine = new ExtensionPolicyEngine(DomainMatcher);
 let wsConnection = null;
 let currentPolicyVersion = 1;
+let authToken = null;
+
+/**
+ * Retrieves cached JWT token or authenticates with default primary user.
+ */
+async function getOrFetchAuthToken() {
+  if (authToken) return authToken;
+
+  try {
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      const data = await chrome.storage.local.get('focusguard_token');
+      if (data && data.focusguard_token) {
+        authToken = data.focusguard_token;
+        return authToken;
+      }
+    }
+
+    const res = await fetch(`${API_BASE}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'demo@focusguard.local', password: 'focusguard123' })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      authToken = data.accessToken;
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        await chrome.storage.local.set({ 'focusguard_token': authToken });
+      }
+      return authToken;
+    }
+  } catch (e) {
+    console.warn('[FocusGuard Extension] Auth exchange error:', e);
+  }
+  return null;
+}
 
 // Initialize Session Tracker with 60s idle threshold
 const sessionTracker = new SessionTracker({
@@ -63,20 +99,23 @@ function redirectToBlockPage(tabId, urlOrDomain, evalResult) {
 async function initializeExtension() {
   console.log('[FocusGuard Extension] Initializing service worker...');
 
-  // 1. Load cached policies and state
+  // 1. Authenticate / load token
+  await getOrFetchAuthToken();
+
+  // 2. Load cached policies and state
   const cached = await policyCache.getStoredData();
   currentPolicyVersion = cached.version || 1;
   policyEngine.setPolicies(cached.policies);
   policyEngine.setTodayUsage(cached.todayUsage);
   policyEngine.setFocusSession(cached.focusSession);
 
-  // 2. Fetch fresh policies from backend
+  // 3. Fetch fresh policies from backend
   await fetchPoliciesFromServer();
 
-  // 3. Connect real-time WebSocket hub
-  connectWebSocket();
+  // 4. Connect real-time WebSocket hub
+  await connectWebSocket();
 
-  // 4. Setup periodic usage sync alarm (every 1 minute)
+  // 5. Setup periodic usage sync alarm (every 1 minute)
   if (chrome.alarms) {
     chrome.alarms.create('fg_usage_sync', { periodInMinutes: 1 });
   }
@@ -87,7 +126,9 @@ async function initializeExtension() {
  */
 async function fetchPoliciesFromServer() {
   try {
-    const resp = await fetch(`${API_BASE}/policies`, { credentials: 'omit' });
+    const token = await getOrFetchAuthToken();
+    const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+    const resp = await fetch(`${API_BASE}/policies`, { headers, credentials: 'omit' });
     if (resp.ok) {
       const data = await resp.json();
       const serverVersion = data.version || (data.length > 0 ? 2 : 1);
@@ -111,16 +152,33 @@ async function fetchPoliciesFromServer() {
   }
 }
 
+let heartbeatInterval = null;
+
+function startHeartbeatLoop() {
+  if (heartbeatInterval) clearInterval(heartbeatInterval);
+  heartbeatInterval = setInterval(() => {
+    if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+      wsConnection.send(JSON.stringify({
+        type: 'HEARTBEAT',
+        platform: 'WEB_EXTENSION',
+        timestamp: Date.now()
+      }));
+    }
+  }, 10000);
+}
+
 /**
  * Real-time WebSocket connection for instant remote focus and limits.
  */
-function connectWebSocket() {
+async function connectWebSocket() {
   if (wsConnection) {
     try { wsConnection.close(); } catch (e) {}
   }
 
   try {
-    wsConnection = new WebSocket(WS_URL);
+    const token = await getOrFetchAuthToken();
+    const wsUrl = token ? `${WS_URL}?token=${token}` : WS_URL;
+    wsConnection = new WebSocket(wsUrl);
 
     wsConnection.onopen = () => {
       console.log('[FocusGuard Extension] Real-time WebSocket connected');
@@ -129,6 +187,13 @@ function connectWebSocket() {
         deviceId: 'extension-browser-node',
         platform: 'WEB_EXTENSION'
       }));
+      startHeartbeatLoop();
+    };
+
+    wsConnection.onclose = () => {
+      console.log('[FocusGuard Extension] WS closed, reconnecting in 5s...');
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      setTimeout(connectWebSocket, 5000);
     };
 
     wsConnection.onmessage = async (msg) => {

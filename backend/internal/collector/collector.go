@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/url"
 	"os/exec"
 	"runtime"
@@ -17,17 +18,20 @@ import (
 )
 
 type ActivityCollector struct {
-	db              *sql.DB
-	evaluator       *policies.Evaluator
-	wsHub           *events.Hub
-	userID          uuid.UUID
-	deviceID        uuid.UUID
-	interval        time.Duration
-	stopChan        chan struct{}
-	mu              sync.Mutex
-	isRunning       bool
-	lastTarget      string
-	lastSampleTime  time.Time
+	db                   *sql.DB
+	evaluator            *policies.Evaluator
+	wsHub                *events.Hub
+	userID               uuid.UUID
+	deviceID             uuid.UUID
+	interval             time.Duration
+	stopChan             chan struct{}
+	mu                   sync.Mutex
+	isRunning            bool
+	lastTarget           string
+	lastSampleTime       time.Time
+	gracePeriodStartedAt time.Time
+	activeBrowserName    string
+	browserGraceActive   bool
 }
 
 func NewActivityCollector(db *sql.DB, evaluator *policies.Evaluator, wsHub *events.Hub, userID, deviceID uuid.UUID) *ActivityCollector {
@@ -59,7 +63,7 @@ func (c *ActivityCollector) Start() {
 	c.lastSampleTime = time.Now()
 	c.mu.Unlock()
 
-	logger.Info("Starting Real macOS Activity Collector daemon", "platform", runtime.GOOS, "interval", c.interval)
+	logger.Info("Starting Real macOS Activity Collector daemon with Extension Watchdog", "platform", runtime.GOOS, "interval", c.interval)
 	go c.runLoop()
 }
 
@@ -93,7 +97,23 @@ func (c *ActivityCollector) sampleAndRecord(now time.Time) {
 		return // macOS specific activity sampling
 	}
 
-	target := c.detectActiveTarget()
+	appName := c.detectFrontmostApp()
+	target := c.detectActiveTarget(appName)
+
+	c.mu.Lock()
+	userID := c.userID
+	deviceID := c.deviceID
+	c.mu.Unlock()
+
+	if userID == uuid.Nil {
+		return
+	}
+
+	// 1. Anti-Tamper Watchdog: Check if extension is installed when browser is running
+	if appName != "" {
+		c.checkExtensionWatchdog(appName, now, userID)
+	}
+
 	if target == "" {
 		c.mu.Lock()
 		c.lastSampleTime = now
@@ -111,8 +131,6 @@ func (c *ActivityCollector) sampleAndRecord(now time.Time) {
 	}
 	c.lastSampleTime = now
 	c.lastTarget = target
-	userID := c.userID
-	deviceID := c.deviceID
 	c.mu.Unlock()
 
 	if userID == uuid.Nil {
@@ -189,17 +207,130 @@ func (c *ActivityCollector) sampleAndRecord(now time.Time) {
 	}
 }
 
-func (c *ActivityCollector) detectActiveTarget() string {
-	// 1. Get frontmost app name
+func (c *ActivityCollector) detectFrontmostApp() string {
 	cmdApp := exec.Command("osascript", "-e", `tell application "System Events" to get name of first application process whose frontmost is true`)
 	outApp, err := cmdApp.Output()
 	if err != nil {
 		return ""
 	}
-	appName := strings.TrimSpace(string(outApp))
+	return strings.TrimSpace(string(outApp))
+}
 
-	// 2. If it's a browser, extract active tab URL domain
-	if appName == "Google Chrome" || appName == "Chromium" || appName == "Brave Browser" {
+func (c *ActivityCollector) checkExtensionWatchdog(appName string, now time.Time, userID uuid.UUID) {
+	isBrowser := appName == "Google Chrome" || appName == "Chromium" || appName == "Brave Browser" || appName == "Microsoft Edge" || appName == "Arc"
+	if !isBrowser {
+		return
+	}
+
+	c.mu.Lock()
+	c.activeBrowserName = appName
+	c.mu.Unlock()
+
+	// Check if extension is active (heartbeat within 25 seconds)
+	isExtActive := false
+	if c.wsHub != nil {
+		isExtActive = c.wsHub.IsExtensionActive(userID, 25*time.Second)
+	}
+
+	if isExtActive {
+		// Extension is active & healthy
+		c.mu.Lock()
+		wasInGrace := c.browserGraceActive
+		c.browserGraceActive = false
+		c.gracePeriodStartedAt = time.Time{}
+		c.mu.Unlock()
+
+		if wasInGrace && c.wsHub != nil {
+			c.wsHub.BroadcastToUser(userID, events.EventMessage{
+				Event: "EXTENSION_RESTORED",
+				Payload: map[string]interface{}{
+					"status":  "HEALTHY",
+					"message": "FocusGuard extension heartbeat verified. Normal browsing resumed.",
+				},
+			})
+			if c.db != nil {
+				_, _ = c.db.Exec(`INSERT INTO audit_logs (id, user_id, action, details, timestamp)
+				                  VALUES ($1, $2, 'EXTENSION_RESTORED', 'FocusGuard Extension heartbeat verified. Normal browsing resumed.', CURRENT_TIMESTAMP)`,
+					uuid.New().String(), userID.String())
+			}
+		}
+		return
+	}
+
+	// Extension is missing / deleted while browser is running
+	c.mu.Lock()
+	if !c.browserGraceActive {
+		c.browserGraceActive = true
+		c.gracePeriodStartedAt = now
+		if c.db != nil {
+			_, _ = c.db.Exec(`INSERT INTO audit_logs (id, user_id, action, details, timestamp)
+			                  VALUES ($1, $2, 'EXTENSION_MISSING_WARNING', $3, CURRENT_TIMESTAMP)`,
+				uuid.New().String(), userID.String(), fmt.Sprintf("FocusGuard Extension missing while %s is active. 60-second grace period initiated.", appName))
+		}
+	}
+	graceStart := c.gracePeriodStartedAt
+	c.mu.Unlock()
+
+	elapsedGrace := int(now.Sub(graceStart).Seconds())
+	remainingSec := 60 - elapsedGrace
+
+	if remainingSec > 0 {
+		// Broadcast countdown tick (60s -> 0s)
+		if c.wsHub != nil {
+			c.wsHub.BroadcastToUser(userID, events.EventMessage{
+				Event: "EXTENSION_GRACE_TICK",
+				Payload: map[string]interface{}{
+					"browserName":      appName,
+					"remainingSeconds": remainingSec,
+					"warning":          fmt.Sprintf("FocusGuard Extension is missing! You have %d seconds to install or enable the extension before %s is force-closed.", remainingSec, appName),
+				},
+			})
+		}
+	} else {
+		// 1 minute expired without extension! Force terminate the browser!
+		logger.Warn("Extension 60s grace period expired! Force-closing browser", "appName", appName)
+		c.forceTerminateBrowser(appName)
+
+		c.mu.Lock()
+		c.browserGraceActive = false
+		c.gracePeriodStartedAt = time.Time{}
+		c.mu.Unlock()
+
+		if c.wsHub != nil {
+			c.wsHub.BroadcastToUser(userID, events.EventMessage{
+				Event: "BROWSER_TERMINATED",
+				Payload: map[string]interface{}{
+					"browserName": appName,
+					"reason":      "FocusGuard Extension was deleted or disabled. 60-second grace period expired.",
+				},
+			})
+		}
+
+		if c.db != nil {
+			_, _ = c.db.Exec(`INSERT INTO audit_logs (id, user_id, action, details, timestamp)
+			                  VALUES ($1, $2, 'BROWSER_FORCE_TERMINATED', $3, CURRENT_TIMESTAMP)`,
+				uuid.New().String(), userID.String(), fmt.Sprintf("%s was force-closed because FocusGuard Extension was not installed within 1 minute.", appName))
+		}
+	}
+}
+
+func (c *ActivityCollector) forceTerminateBrowser(appName string) {
+	if runtime.GOOS == "darwin" {
+		script := fmt.Sprintf(`tell application "%s" to quit`, appName)
+		_ = exec.Command("osascript", "-e", script).Run()
+	}
+}
+
+func (c *ActivityCollector) detectActiveTarget(appName string) string {
+	if appName == "" {
+		appName = c.detectFrontmostApp()
+		if appName == "" {
+			return ""
+		}
+	}
+
+	// If it's a browser, extract active tab URL domain
+	if appName == "Google Chrome" || appName == "Chromium" || appName == "Brave Browser" || appName == "Microsoft Edge" {
 		script := `tell application "` + appName + `" to get URL of active tab of front window`
 		cmdURL := exec.Command("osascript", "-e", script)
 		outURL, err := cmdURL.Output()

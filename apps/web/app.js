@@ -30,10 +30,12 @@ const state = {
   focusTimerInterval: null,
   ws: null,
   wsConnected: false,
+  enforcementTimeline: [],
+  recommendations: [],
   
   // Real Nodes
   macDeviceId: "00000000-0000-0000-0000-000000000002",
-  managedTabletDeviceId: "00000000-0000-0000-0000-000000000004",
+  managedTabletDeviceId: null,
   simSyncSequence: 10
 };
 
@@ -43,6 +45,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   await ensureAuthentication();
   await refreshAllData();
   await fetchAuditLogs();
+  await fetchEnforcementTimeline();
+  await fetchRecommendations();
   initWebSocket();
 });
 
@@ -107,8 +111,42 @@ async function refreshAllData() {
       state.policies = await policiesRes.json();
       renderPoliciesUI();
     }
+
+    // 2d. Fetch Timeline & Recommendations
+    await fetchEnforcementTimeline();
+    await fetchRecommendations();
   } catch (err) {
     console.error("Error refreshing data:", err);
+  }
+}
+
+async function fetchEnforcementTimeline() {
+  if (!state.token) return;
+  try {
+    const res = await fetch(`${API_BASE}/analytics/enforcement-timeline`, {
+      headers: { "Authorization": `Bearer ${state.token}` }
+    });
+    if (res.ok) {
+      state.enforcementTimeline = await res.json();
+      renderEnforcementTimelineUI();
+    }
+  } catch (e) {
+    console.error("Failed to fetch enforcement timeline:", e);
+  }
+}
+
+async function fetchRecommendations() {
+  if (!state.token) return;
+  try {
+    const res = await fetch(`${API_BASE}/analytics/recommendations`, {
+      headers: { "Authorization": `Bearer ${state.token}` }
+    });
+    if (res.ok) {
+      state.recommendations = await res.json();
+      renderRecommendationsUI();
+    }
+  } catch (e) {
+    console.error("Failed to fetch recommendations:", e);
   }
 }
 
@@ -191,6 +229,27 @@ function handleWebSocketEvent(msg) {
       endFocusTimerUI();
     }
     fetchAuditLogs();
+  } else if (msg.event === "EXTENSION_GRACE_TICK") {
+    const payload = msg.payload;
+    const modal = document.getElementById("modal-extension-grace");
+    if (modal) {
+      modal.style.display = "flex";
+      const countEl = document.getElementById("grace-timer-countdown");
+      if (countEl) countEl.innerText = `00:${String(payload.remainingSeconds || 0).padStart(2, '0')}`;
+      const browserEl = document.getElementById("grace-browser-name");
+      if (browserEl && payload.browserName) browserEl.innerText = `Target Application: ${payload.browserName}`;
+    }
+  } else if (msg.event === "EXTENSION_RESTORED") {
+    const modal = document.getElementById("modal-extension-grace");
+    if (modal) modal.style.display = "none";
+    refreshAllData();
+    fetchAuditLogs();
+  } else if (msg.event === "BROWSER_TERMINATED") {
+    const countEl = document.getElementById("grace-timer-countdown");
+    if (countEl) countEl.innerText = "00:00";
+    const msgEl = document.getElementById("grace-modal-message");
+    if (msgEl) msgEl.innerHTML = `<strong style="color: #ef4444;">${escapeHtml(msg.payload.browserName || "Browser")} was force-closed.</strong> Re-install extension to restore access.`;
+    fetchAuditLogs();
   }
 }
 
@@ -211,10 +270,10 @@ async function refreshAnalyticsSilently() {
 function renderAnalyticsUI() {
   const d = state.dailyAnalytics;
   
-  document.getElementById("metric-total-focus").innerText = `${d.totalFocusMinutes}m`;
-  document.getElementById("metric-budget-used").innerText = `${d.budgetUsedMinutes}`;
-  document.getElementById("metric-budget-total").innerText = `/ ${d.budgetTotalMinutes} min`;
-  document.getElementById("budget-ratio-badge").innerText = `${d.budgetUsedMinutes} / ${d.budgetTotalMinutes} min`;
+  document.getElementById("metric-total-focus").innerText = `${d.totalFocusMinutes || 0}m`;
+  document.getElementById("metric-budget-used").innerText = `${d.budgetUsedMinutes || 0}`;
+  document.getElementById("metric-budget-total").innerText = `/ ${d.budgetTotalMinutes || 0} min`;
+  document.getElementById("budget-ratio-badge").innerText = `${d.budgetUsedMinutes || 0} / ${d.budgetTotalMinutes || 0} min`;
   
   const pct = d.budgetTotalMinutes > 0 ? Math.min(100, Math.round((d.budgetUsedMinutes / d.budgetTotalMinutes) * 100)) : 0;
   document.getElementById("budget-progress-fill").style.width = `${pct}%`;
@@ -226,15 +285,38 @@ function renderAnalyticsUI() {
   } else {
     document.getElementById("budget-progress-fill").className = "progress-bar-fill fill-purple";
   }
+
+  // Render Transparent Attention Score
+  if (d.attentionScore) {
+    const score = d.attentionScore;
+    const scoreDisp = document.getElementById("score-display");
+    if (scoreDisp) scoreDisp.innerHTML = `${score.overallScore}<span style="font-size: 20px; color: #94a3b8;">/100</span>`;
+    
+    const badge = document.getElementById("score-rating-badge");
+    if (badge) {
+      badge.innerText = score.rating || "HEALTHY";
+      badge.className = score.overallScore >= 80 ? "badge badge-green" : (score.overallScore >= 60 ? "badge badge-purple" : "badge badge-red");
+    }
+
+    const formula = document.getElementById("score-formula-text");
+    if (formula) {
+      formula.innerHTML = `
+        Focus: +${score.focusCompletionPoints || 0} pts &bull; Limit Adherence: +${score.limitAdherencePoints || 0} pts<br>
+        Distraction: -${score.distractionDeductions || 0} pts &bull; Protection Shield: +${score.blockedAttemptsShield || 0} pts
+      `;
+    }
+  }
 }
 
 function renderDevicesUI() {
   const container = document.getElementById("device-list-container");
   const countBadge = document.getElementById("device-count-badge");
+  const healthBadges = document.getElementById("device-health-badges");
 
   if (!state.devices || state.devices.length === 0) {
     container.innerHTML = `<div class="empty-state"><p>No devices enrolled yet. Click "+ Pair New Device" above.</p></div>`;
     countBadge.innerText = "0 Devices";
+    if (healthBadges) healthBadges.innerHTML = `<div class="empty-state" style="grid-column: 1 / -1; padding: 10px;"><p style="font-size: 12px;">No active device nodes.</p></div>`;
     return;
   }
 
@@ -259,6 +341,69 @@ function renderDevicesUI() {
       </div>
     `;
   }).join("");
+
+  // Also render device health badges
+  if (healthBadges) {
+    healthBadges.innerHTML = state.devices.map(dev => `
+      <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 10px;">
+        <div style="font-size: 11px; color: #94a3b8;">${escapeHtml(dev.deviceName)} (${escapeHtml(dev.role || "NODE")})</div>
+        <span class="badge badge-green mt-1">100% HEALTHY</span>
+      </div>
+    `).join("");
+  }
+}
+
+function renderEnforcementTimelineUI() {
+  const container = document.getElementById("enforcement-timeline-stream");
+  if (!container) return;
+
+  if (!state.enforcementTimeline || state.enforcementTimeline.length === 0) {
+    container.innerHTML = `<div class="empty-state" style="padding: 12px; font-size: 12px;"><p>No enforcement events recorded yet today. Active tracking is listening...</p></div>`;
+    return;
+  }
+
+  container.innerHTML = state.enforcementTimeline.map(ev => {
+    let colorClass = "text-purple";
+    let borderCol = "#6366f1";
+    let bgCol = "rgba(99,102,241,0.1)";
+
+    if (ev.action.includes("LIMIT") || ev.action.includes("BLOCK") || ev.action.includes("TAMPER")) {
+      colorClass = "text-red";
+      borderCol = "#ef4444";
+      bgCol = "rgba(239,68,68,0.1)";
+    } else if (ev.action.includes("WARNING") || ev.action.includes("TRACK")) {
+      colorClass = "text-yellow";
+      borderCol = "#f59e0b";
+      bgCol = "rgba(245,158,11,0.1)";
+    }
+
+    return `
+      <div style="display: flex; justify-content: space-between; font-size: 11px; padding: 6px 10px; background: ${bgCol}; border-left: 3px solid ${borderCol}; border-radius: 6px;">
+        <span><strong>${escapeHtml(ev.timestamp)}</strong> — ${escapeHtml(ev.details || ev.action)}</span>
+        <span class="font-mono ${colorClass}">${escapeHtml(ev.layer || "SYSTEM")}</span>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderRecommendationsUI() {
+  const container = document.getElementById("recommendations-container");
+  if (!container) return;
+
+  if (!state.recommendations || state.recommendations.length === 0) {
+    container.innerHTML = `<div class="empty-state" style="padding: 12px; font-size: 12px;"><p>No policy recommendations currently. Real-time usage is within healthy limits.</p></div>`;
+    return;
+  }
+
+  container.innerHTML = state.recommendations.map(rec => `
+    <div style="background: rgba(168,85,247,0.08); border: 1px solid rgba(168,85,247,0.2); border-radius: 10px; padding: 12px;">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span class="text-bold text-small" style="color: #c084fc;">💡 ${escapeHtml(rec.title)}</span>
+        <button class="btn btn-sm btn-outline btn-apply-rec" data-target="${escapeHtml(rec.target)}" data-limit="${rec.limitMinutes}">Apply (${rec.limitMinutes}m)</button>
+      </div>
+      <p class="text-small text-muted mt-1">${escapeHtml(rec.insight)}</p>
+    </div>
+  `).join("");
 }
 
 function renderPoliciesUI() {
@@ -957,6 +1102,22 @@ function setupEventListeners() {
   document.getElementById("btn-close-blocker").addEventListener("click", () => {
     document.getElementById("modal-blocker").style.display = "none";
   });
+
+  // Extension Grace Period Modal Listeners
+  const btnOpenGuide = document.getElementById("btn-open-extensions-guide");
+  if (btnOpenGuide) {
+    btnOpenGuide.addEventListener("click", () => {
+      alert("📦 Extension Installation Steps:\n\n1. Open chrome://extensions (or brave://extensions / edge://extensions)\n2. Enable Developer mode\n3. Click 'Load unpacked'\n4. Select: " + window.location.origin + "/../../apps/extension");
+    });
+  }
+  const btnDismissGrace = document.getElementById("btn-dismiss-grace");
+  if (btnDismissGrace) {
+    btnDismissGrace.addEventListener("click", () => {
+      document.getElementById("modal-extension-grace").style.display = "none";
+      refreshAllData();
+      fetchAuditLogs();
+    });
+  }
 }
 
 function updateConnectionStatus(connected) {

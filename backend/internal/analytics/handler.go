@@ -3,7 +3,9 @@ package analytics
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/focusguard/focusguard/backend/internal/middleware"
@@ -159,20 +161,99 @@ func (h *Handler) GetDailyAnalytics(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/v1/analytics/timeline
 func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.GetUserClaims(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
 	todayStr := time.Now().UTC().Format("2006-01-02")
 	resp := TimelineResponse{
-		Date: todayStr,
-		Blocks: []TimelineBlock{
-			{Time: "08:00 AM", Label: "Deep Work / Code Review", Category: "WORK", DurationMinutes: 80, BlockType: "PRODUCTIVE"},
-			{Time: "09:20 AM", Label: "YouTube (Browsing)", Category: "VIDEO", DurationMinutes: 15, BlockType: "DISTRACTION"},
-			{Time: "09:35 AM", Label: "Architecture Design", Category: "WORK", DurationMinutes: 85, BlockType: "PRODUCTIVE"},
-			{Time: "11:00 AM", Label: "Remote Focus Session", Category: "FOCUS", DurationMinutes: 60, BlockType: "FOCUS"},
-			{Time: "12:00 PM", Label: "Rest / Lunch Break", Category: "BREAK", DurationMinutes: 45, BlockType: "PRODUCTIVE"},
-		},
-		ProductiveHours: 4.5,
-		DistractionMins: 15,
-		FocusHours:      2.0,
-		TopDistraction:  "YouTube",
+		Date:            todayStr,
+		Blocks:          []TimelineBlock{},
+		ProductiveHours: 0,
+		DistractionMins: 0,
+		FocusHours:      0,
+		TopDistraction:  "None",
+	}
+
+	if h.db != nil {
+		// 1. Query real usage aggregates for today
+		usageQ := `SELECT target_value, SUM(total_duration_seconds)
+		          FROM usage_aggregates
+		          WHERE user_id = $1 AND date = $2
+		          GROUP BY target_value
+		          ORDER BY SUM(total_duration_seconds) DESC`
+		rows, err := h.db.QueryContext(r.Context(), usageQ, claims.UserID.String(), todayStr)
+		if err == nil {
+			defer rows.Close()
+			maxDistractSec := 0
+			totalUsageSec := 0
+			for rows.Next() {
+				var targetVal string
+				var sec int
+				if err := rows.Scan(&targetVal, &sec); err == nil {
+					mins := sec / 60
+					if mins <= 0 && sec > 0 {
+						mins = 1
+					}
+					totalUsageSec += sec
+					blockType := "PRODUCTIVE"
+					category := "APPLICATION"
+
+					lowerTarget := strings.ToLower(targetVal)
+					if strings.Contains(lowerTarget, "youtube") || strings.Contains(lowerTarget, "reddit") ||
+						strings.Contains(lowerTarget, "netflix") || strings.Contains(lowerTarget, "twitter") ||
+						strings.Contains(lowerTarget, "x.com") || strings.Contains(lowerTarget, "instagram") ||
+						strings.Contains(lowerTarget, "tiktok") || strings.Contains(lowerTarget, "facebook") {
+						blockType = "DISTRACTION"
+						category = "MEDIA / SOCIAL"
+						resp.DistractionMins += mins
+						if sec > maxDistractSec {
+							maxDistractSec = sec
+							resp.TopDistraction = targetVal
+						}
+					}
+
+					resp.Blocks = append(resp.Blocks, TimelineBlock{
+						Time:            "Today",
+						Label:           targetVal,
+						Category:        category,
+						DurationMinutes: mins,
+						BlockType:       blockType,
+					})
+				}
+			}
+			resp.ProductiveHours = float64(totalUsageSec-resp.DistractionMins*60) / 3600.0
+			if resp.ProductiveHours < 0 {
+				resp.ProductiveHours = 0
+			}
+		}
+
+		// 2. Query real focus sessions today
+		focusQ := `SELECT duration_minutes, started_at FROM focus_sessions
+		          WHERE user_id = $1 AND started_at >= $2`
+		todayStart := time.Now().UTC().Truncate(24 * time.Hour)
+		frows, err := h.db.QueryContext(r.Context(), focusQ, claims.UserID.String(), todayStart)
+		if err == nil {
+			defer frows.Close()
+			totalFocusMins := 0
+			for frows.Next() {
+				var fMins int
+				var startedAt time.Time
+				if err := frows.Scan(&fMins, &startedAt); err == nil {
+					totalFocusMins += fMins
+					resp.Blocks = append(resp.Blocks, TimelineBlock{
+						Time:            startedAt.Format("03:04 PM"),
+						Label:           "Remote Focus Lockdown",
+						Category:        "FOCUS",
+						DurationMinutes: fMins,
+						BlockType:       "FOCUS",
+					})
+				}
+			}
+			resp.FocusHours = float64(totalFocusMins) / 60.0
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -182,6 +263,12 @@ func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/v1/analytics/weekly
 func (h *Handler) GetWeeklyAnalytics(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.GetUserClaims(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
 	today := time.Now().UTC()
 	startOfWeek := today.AddDate(0, 0, -6).Format("2006-01-02")
 	endOfWeek := today.Format("2006-01-02")
@@ -190,17 +277,57 @@ func (h *Handler) GetWeeklyAnalytics(w http.ResponseWriter, r *http.Request) {
 		StartDate:       startOfWeek,
 		EndDate:         endOfWeek,
 		DailyTrends:     []DailyUsageTrend{},
-		TopDistraction:  "YouTube (Video)",
-		AverageFocus:    "1h 45m / day",
-		AttentionScore:  82,
+		TopDistraction:  "None",
+		AverageFocus:    "0m / day",
+		AttentionScore:  100,
 		ServerTimestamp: time.Now().UTC().Unix(),
+	}
+
+	// Map of dates to duration in minutes
+	dateUsage := make(map[string]int)
+	if h.db != nil {
+		q := `SELECT date, SUM(total_duration_seconds)
+		      FROM usage_aggregates
+		      WHERE user_id = $1 AND date >= $2 AND date <= $3
+		      GROUP BY date`
+		rows, err := h.db.QueryContext(r.Context(), q, claims.UserID.String(), startOfWeek, endOfWeek)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var d string
+				var sec int
+				if err := rows.Scan(&d, &sec); err == nil {
+					dateUsage[d] = sec / 60
+				}
+			}
+		}
+
+		// Query top distraction across the week
+		topQ := `SELECT target_value FROM usage_aggregates
+		        WHERE user_id = $1 AND date >= $2 AND date <= $3
+		        GROUP BY target_value
+		        ORDER BY SUM(total_duration_seconds) DESC LIMIT 1`
+		var topTarget string
+		if err := h.db.QueryRowContext(r.Context(), topQ, claims.UserID.String(), startOfWeek, endOfWeek).Scan(&topTarget); err == nil && topTarget != "" {
+			resp.TopDistraction = topTarget
+		}
+
+		// Query focus minutes
+		var totalFocusMins int
+		fQ := `SELECT COALESCE(SUM(duration_minutes), 0) FROM focus_sessions
+		      WHERE user_id = $1 AND started_at >= $2`
+		_ = h.db.QueryRowContext(r.Context(), fQ, claims.UserID.String(), today.AddDate(0, 0, -6)).Scan(&totalFocusMins)
+		if totalFocusMins > 0 {
+			avgMins := totalFocusMins / 7
+			resp.AverageFocus = fmt.Sprintf("%dm / day", avgMins)
+		}
 	}
 
 	for i := 6; i >= 0; i-- {
 		d := today.AddDate(0, 0, -i).Format("2006-01-02")
 		resp.DailyTrends = append(resp.DailyTrends, DailyUsageTrend{
 			Date:                 d,
-			TotalDurationMinutes: 15 + (i*7)%25,
+			TotalDurationMinutes: dateUsage[d],
 		})
 	}
 
@@ -229,55 +356,69 @@ type SmartRecommendation struct {
 }
 
 func (h *Handler) GetEnforcementTimeline(w http.ResponseWriter, r *http.Request) {
-	events := []EnforcementTimelineEvent{
-		{
-			Timestamp: "10:02:11",
-			Action:    "POLICY_SYNC",
-			Target:    "Fleet Policies (v2)",
-			Device:    "All Nodes",
-			Layer:     "CLOUD_SYNC",
-			Details:   "Synchronized policy v2 with monotonic version counter.",
-		},
-		{
-			Timestamp: "10:02:12",
-			Action:    "DNR_COMPILED",
-			Target:    "youtube.com",
-			Device:    "Chrome Extension Node",
-			Layer:     "BROWSER_DNR",
-			Details:   "Dynamic declarative rules compiled into browser request engine.",
-		},
-		{
-			Timestamp: "10:02:12",
-			Action:    "VPN_RULES_UPDATED",
-			Target:    "youtube.com, instagram.com",
-			Device:    "Student Pixel Tablet",
-			Layer:     "VPN_DNS_SINKHOLE",
-			Details:   "Trie DomainPolicyCache updated for packet sinkhole.",
-		},
-		{
-			Timestamp: "10:31:42",
-			Action:    "USAGE_WARNING_90",
-			Target:    "youtube.com (27m / 30m)",
-			Device:    "MacBook Pro 16\"",
-			Layer:     "SESSION_TRACKER",
-			Details:   "90% budget threshold reached. Displaying progressive notification.",
-		},
-		{
-			Timestamp: "10:31:44",
-			Action:    "LIMIT_EXHAUSTED",
-			Target:    "youtube.com (30m / 30m)",
-			Device:    "Shared Cloud Budget",
-			Layer:     "POLICY_ENGINE",
-			Details:   "Combined usage across Mac, Tablet, and Extension hit 30m cap.",
-		},
-		{
-			Timestamp: "10:31:44",
-			Action:    "DOMAIN_BLOCK_ACTIVATED",
-			Target:    "youtube.com",
-			Device:    "All Fleet Devices",
-			Layer:     "BROWSER_DNR / VPN_SINKHOLE",
-			Details:   "DNR redirect and RFC 1035 NXDOMAIN active simultaneously.",
-		},
+	claims, ok := middleware.GetUserClaims(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	events := []EnforcementTimelineEvent{}
+
+	if h.db != nil {
+		// Query real audit logs from database
+		auditQ := `SELECT action, details, timestamp FROM audit_logs
+		          WHERE user_id = $1 ORDER BY timestamp DESC LIMIT 20`
+		rows, err := h.db.QueryContext(r.Context(), auditQ, claims.UserID.String())
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var action, details string
+				var ts time.Time
+				if err := rows.Scan(&action, &details, &ts); err == nil {
+					layer := "CLOUD_ENGINE"
+					if strings.Contains(action, "DEVICE") || strings.Contains(action, "ENROLL") {
+						layer = "FLEET_MGMT"
+					} else if strings.Contains(action, "FOCUS") {
+						layer = "FOCUS_LOCK"
+					} else if strings.Contains(action, "POLICY") {
+						layer = "POLICY_SYNC"
+					} else if strings.Contains(action, "TAMPER") {
+						layer = "SECURITY"
+					}
+
+					events = append(events, EnforcementTimelineEvent{
+						Timestamp: ts.Format("15:04:05"),
+						Action:    action,
+						Target:    "Fleet Policies",
+						Device:    "Fleet Node",
+						Layer:     layer,
+						Details:   details,
+					})
+				}
+			}
+		}
+
+		// Also query blocked_events
+		blockQ := `SELECT target_value, timestamp FROM blocked_events
+		          WHERE user_id = $1 ORDER BY timestamp DESC LIMIT 10`
+		brows, err := h.db.QueryContext(r.Context(), blockQ, claims.UserID.String())
+		if err == nil {
+			defer brows.Close()
+			for brows.Next() {
+				var targetVal string
+				var ts time.Time
+				if err := brows.Scan(&targetVal, &ts); err == nil {
+					events = append(events, EnforcementTimelineEvent{
+						Timestamp: ts.Format("15:04:05"),
+						Action:    "LIMIT_EXHAUSTED",
+						Target:    targetVal,
+						Device:    "Local Node",
+						Layer:     "BROWSER_DNR / SINKHOLE",
+						Details:   fmt.Sprintf("Attention limit exceeded for %s. Shield active.", targetVal),
+					})
+				}
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -286,25 +427,53 @@ func (h *Handler) GetEnforcementTimeline(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *Handler) GetRecommendations(w http.ResponseWriter, r *http.Request) {
-	recs := []SmartRecommendation{
-		{
-			ID:              "rec-1",
-			Title:           "Night Entertainment Limit",
-			Insight:         "FocusGuard detected 1h 48m YouTube usage between 11:00 PM and 01:00 AM.",
-			SuggestedPolicy: "Limit YouTube to 30 min daily during late night hours.",
-			Target:          "youtube.com",
-			LimitMinutes:    30,
-			Category:        "VIDEO",
-		},
-		{
-			ID:              "rec-2",
-			Title:           "Social Media Study Lock",
-			Insight:         "Social apps consumed 38m during scheduled study hours (08:00 AM – 01:00 PM).",
-			SuggestedPolicy: "Block Category SOCIAL during weekday morning study blocks.",
-			Target:          "SOCIAL",
-			LimitMinutes:    0,
-			Category:        "SOCIAL",
-		},
+	claims, ok := middleware.GetUserClaims(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	recs := []SmartRecommendation{}
+
+	if h.db != nil {
+		// Find real heavy usage targets (> 15 minutes) without existing strict limit
+		todayStr := time.Now().UTC().Format("2006-01-02")
+		q := `SELECT target_value, SUM(total_duration_seconds)
+		      FROM usage_aggregates
+		      WHERE user_id = $1 AND date = $2
+		      GROUP BY target_value
+		      HAVING SUM(total_duration_seconds) >= 900
+		      ORDER BY SUM(total_duration_seconds) DESC LIMIT 5`
+		rows, err := h.db.QueryContext(r.Context(), q, claims.UserID.String(), todayStr)
+		if err == nil {
+			defer rows.Close()
+			idx := 1
+			for rows.Next() {
+				var targetVal string
+				var sec int
+				if err := rows.Scan(&targetVal, &sec); err == nil {
+					mins := sec / 60
+					category := "MEDIA"
+					lower := strings.ToLower(targetVal)
+					if strings.Contains(lower, "social") || strings.Contains(lower, "twitter") || strings.Contains(lower, "instagram") || strings.Contains(lower, "reddit") {
+						category = "SOCIAL"
+					} else if strings.Contains(lower, "youtube") || strings.Contains(lower, "netflix") || strings.Contains(lower, "video") {
+						category = "VIDEO"
+					}
+
+					recs = append(recs, SmartRecommendation{
+						ID:              fmt.Sprintf("rec-real-%d", idx),
+						Title:           fmt.Sprintf("Limit %s", targetVal),
+						Insight:         fmt.Sprintf("FocusGuard detected %dm active usage for %s today.", mins, targetVal),
+						SuggestedPolicy: fmt.Sprintf("Set a 30m daily budget on %s to protect focus.", targetVal),
+						Target:          targetVal,
+						LimitMinutes:    30,
+						Category:        category,
+					})
+					idx++
+				}
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
