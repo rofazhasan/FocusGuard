@@ -104,25 +104,10 @@ class ExtensionPolicyEngine {
       }
     }
 
-    // 2. Precedence Phase: Check Explicit ALLOW policies first
-    for (const policy of this.policies) {
-      if (!policy.isEnabled || policy.enforcementMode !== 'ALLOW') continue;
-      for (const target of policy.targets || []) {
-        if (target.targetType === 'WEBSITE' || target.targetType === 'DOMAIN') {
-          if (this.matcher.isDomainMatch(domain, target.targetValue)) {
-            return { action: 'ALLOW', reason: 'Explicitly Whitelisted', policyName: policy.name };
-          }
-        }
-      }
-    }
-
-    // 3. Evaluate BLOCK and TIME_LIMIT policies
-    for (const policy of this.policies) {
-      if (!policy.isEnabled) continue;
-
+    // Helper to check policy match
+    const checkMatch = (policy) => {
       let isMatched = false;
       let matchedTarget = null;
-
       for (const target of policy.targets || []) {
         if (target.targetType === 'WEBSITE' || target.targetType === 'DOMAIN') {
           if (this.matcher.isDomainMatch(domain, target.targetValue)) {
@@ -144,12 +129,17 @@ class ExtensionPolicyEngine {
           }
         }
       }
+      return { isMatched, matchedTarget };
+    };
 
-      if (!isMatched) continue;
-
-      // Policy Rule: Immediate BLOCK without limit
+    // 2. Precedence Phase 1: Check Explicit BLOCK policies (limitSeconds <= 0)
+    for (const policy of this.policies) {
+      if (!policy.isEnabled || policy.enforcementMode !== 'BLOCK') continue;
       const limitSeconds = policy.limitSeconds || 0;
-      if (policy.enforcementMode === 'BLOCK' && limitSeconds <= 0) {
+      if (limitSeconds > 0) continue; // Time limit evaluated in phase 2
+
+      const { isMatched } = checkMatch(policy);
+      if (isMatched) {
         return {
           action: 'BLOCK',
           reason: 'Domain Restricted by Policy',
@@ -162,13 +152,17 @@ class ExtensionPolicyEngine {
           nextReset: '12:00 AM'
         };
       }
+    }
 
-      // Policy Rule: TIME_LIMIT (Attention Budget)
-      if (limitSeconds > 0) {
+    // 3. Precedence Phase 2: Check TIME_LIMIT budget exhaustion
+    for (const policy of this.policies) {
+      if (!policy.isEnabled) continue;
+      const limitSeconds = policy.limitSeconds || policy.limit || 0;
+      if (limitSeconds <= 0) continue;
+
+      const { isMatched, matchedTarget } = checkMatch(policy);
+      if (isMatched) {
         const usedSeconds = this.todayUsage[matchedTarget] || this.todayUsage[domain] || 0;
-        const remainingSeconds = Math.max(0, limitSeconds - usedSeconds);
-        const percentage = Math.min(100, Math.round((usedSeconds / limitSeconds) * 100));
-
         if (usedSeconds >= limitSeconds) {
           return {
             action: 'BLOCK',
@@ -182,6 +176,29 @@ class ExtensionPolicyEngine {
             nextReset: '12:00 AM'
           };
         }
+      }
+    }
+
+    // 4. Precedence Phase 3: Check Explicit ALLOW policies
+    for (const policy of this.policies) {
+      if (!policy.isEnabled || policy.enforcementMode !== 'ALLOW') continue;
+      const { isMatched } = checkMatch(policy);
+      if (isMatched) {
+        return { action: 'ALLOW', reason: 'Explicitly Whitelisted', policyName: policy.name };
+      }
+    }
+
+    // 5. Precedence Phase 4: TIME_LIMIT in-budget / warnings
+    for (const policy of this.policies) {
+      if (!policy.isEnabled) continue;
+      const limitSeconds = policy.limitSeconds || policy.limit || 0;
+      if (limitSeconds <= 0) continue;
+
+      const { isMatched, matchedTarget } = checkMatch(policy);
+      if (isMatched) {
+        const usedSeconds = this.todayUsage[matchedTarget] || this.todayUsage[domain] || 0;
+        const remainingSeconds = Math.max(0, limitSeconds - usedSeconds);
+        const percentage = Math.min(100, Math.round((usedSeconds / limitSeconds) * 100));
 
         if (percentage >= 90) {
           return {
@@ -210,7 +227,6 @@ class ExtensionPolicyEngine {
         }
       }
     }
-
     return { action: 'ALLOW', reason: 'No blocking policy active' };
   }
 }

@@ -3,10 +3,76 @@
  * Cryptographic device identity, pairing state machine, and protection score calculator.
  */
 
-const { PairingState, ProtectionState, Platform } = require('../shared-types/index.js');
+const {
+  PairingState,
+  ProtectionState,
+  Platform,
+  DeviceStatus,
+  PairingStatus
+} = require('../shared-types/index.js');
 const CryptoEngine = require('../crypto/index.js');
 
+/**
+ * Explicit Finite State Machine for Device Lifecycle
+ */
+class DeviceStateMachine {
+  static States = {
+    UNREGISTERED: 'UNREGISTERED',
+    PAIRING: 'PAIRING',
+    PENDING_APPROVAL: 'PENDING_APPROVAL',
+    ACTIVE: 'ACTIVE',
+    OFFLINE: 'OFFLINE',
+    REJECTED: 'REJECTED',
+    EXPIRED: 'EXPIRED',
+    REVOKED: 'REVOKED',
+    TERMINAL: 'TERMINAL'
+  };
+
+  static Transitions = {
+    UNREGISTERED: ['PAIRING'],
+    PAIRING: ['PENDING_APPROVAL', 'EXPIRED'],
+    PENDING_APPROVAL: ['ACTIVE', 'REJECTED'],
+    ACTIVE: ['OFFLINE', 'REVOKED'],
+    OFFLINE: ['ACTIVE', 'REVOKED'],
+    REJECTED: ['TERMINAL'],
+    EXPIRED: ['TERMINAL'],
+    REVOKED: ['TERMINAL'],
+    TERMINAL: []
+  };
+
+  /**
+   * Validates if a transition from currentState to nextState is permitted.
+   * @param {string} currentState
+   * @param {string} nextState
+   * @returns {boolean}
+   */
+  static canTransition(currentState, nextState) {
+    if (!this.Transitions[currentState]) return false;
+    return this.Transitions[currentState].includes(nextState);
+  }
+
+  /**
+   * Transitions state or throws an error on illegal transition.
+   * @param {string} currentState
+   * @param {string} nextState
+   * @returns {string} nextState
+   */
+  static transition(currentState, nextState) {
+    if (!this.canTransition(currentState, nextState)) {
+      throw new Error(`Illegal state transition from ${currentState} to ${nextState}`);
+    }
+    return nextState;
+  }
+}
+
 class DeviceModel {
+  static DeviceStateMachine = DeviceStateMachine;
+  static PairingState = PairingState;
+  static ProtectionState = ProtectionState;
+  static Platform = Platform;
+  static DeviceStatus = DeviceStatus;
+  static PairingStatus = PairingStatus;
+
   /**
    * Generates a new cryptographic device record.
    * NEVER uses MAC address, IMEI, or hardware IDs as primary identity.
@@ -29,6 +95,7 @@ class DeviceModel {
       deviceName: deviceName || `FocusGuard ${platform}`,
       pairingState: PairingState.UNPAIRED,
       protectionState: ProtectionState.PROTECTED,
+      status: DeviceStatus.PENDING,
       policyVersion: 1,
       createdAt: now,
       lastSeen: now
@@ -37,6 +104,7 @@ class DeviceModel {
 
   /**
    * Validates state transitions in the Pairing State Machine.
+   * Preserves backward compatibility while incorporating canonical lifecycle rules.
    * @param {string} currentState 
    * @param {string} nextState 
    * @returns {boolean}
@@ -45,7 +113,7 @@ class DeviceModel {
     const validTransitions = {
       [PairingState.UNPAIRED]: [PairingState.PAIRING],
       [PairingState.PAIRING]: [PairingState.PENDING_APPROVAL, PairingState.UNPAIRED],
-      [PairingState.PENDING_APPROVAL]: [PairingState.PAIRED, PairingState.UNTRUSTED, PairingState.UNPAIRED],
+      [PairingState.PENDING_APPROVAL]: [PairingState.PAIRED, PairingState.UNTRUSTED, PairingState.UNPAIRED, PairingState.ACTIVE],
       [PairingState.PAIRED]: [PairingState.ACTIVE, PairingState.OFFLINE, PairingState.REVOKED, PairingState.BLOCKED],
       [PairingState.ACTIVE]: [PairingState.OFFLINE, PairingState.REVOKED, PairingState.BLOCKED],
       [PairingState.OFFLINE]: [PairingState.ACTIVE, PairingState.REVOKED, PairingState.BLOCKED],
@@ -102,5 +170,7 @@ class DeviceModel {
     };
   }
 }
+
+DeviceModel.DeviceModel = DeviceModel;
 
 module.exports = DeviceModel;

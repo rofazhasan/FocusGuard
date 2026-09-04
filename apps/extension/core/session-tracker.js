@@ -48,8 +48,10 @@ class SessionTracker {
   startSession(domain, tabId, windowId) {
     const cleanDomain = typeof DomainMatcher !== 'undefined' ? DomainMatcher.normalizeDomain(domain) : domain.toLowerCase().replace(/^https?:\/\//, '').split('/')[0];
     
-    // If already tracking this domain in active state, continue
+    // If already tracking this domain in active state, continue but ensure current tab/window are updated
     if (this.currentDomain === cleanDomain && this.state === SessionState.ACTIVE) {
+      this.currentTabId = tabId;
+      this.currentWindowId = windowId;
       return;
     }
 

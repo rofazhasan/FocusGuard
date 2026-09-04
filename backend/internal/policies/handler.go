@@ -306,3 +306,104 @@ func (h *Handler) ExplainPolicy(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(result)
 }
 
+type PolicySyncResponse struct {
+	PolicyVersion int       `json:"policyVersion"`
+	Policies      []Policy  `json:"policies"`
+	ServerTime    time.Time `json:"serverTime"`
+	SyncCursor    string    `json:"syncCursor"`
+	Status        string    `json:"status"`
+}
+
+func (h *Handler) SyncDevicePolicies(w http.ResponseWriter, r *http.Request) {
+	var userID uuid.UUID
+	var deviceIDStr string
+
+	if devCtx, ok := middleware.GetDeviceClaims(r.Context()); ok {
+		userID = devCtx.UserID
+		deviceIDStr = devCtx.DeviceID.String()
+	} else if claims, ok := middleware.GetUserClaims(r.Context()); ok {
+		userID = claims.UserID
+	} else {
+		http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	policiesList := []Policy{}
+	maxVersion := 1
+
+	if h.db != nil {
+		q := `SELECT id, user_id, name, limit_seconds, period, schedule_cron, timezone, enforcement_mode, is_enabled, version, created_at, updated_at
+		      FROM policies WHERE user_id = $1 AND is_enabled = 1 ORDER BY version DESC`
+		rows, err := h.db.QueryContext(r.Context(), q, userID.String())
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var idStr, uidStr, perStr, enfStr string
+				var isEnabledInt int
+				var p Policy
+				var cron sql.NullString
+				if err := rows.Scan(&idStr, &uidStr, &p.Name, &p.LimitSeconds, &perStr, &cron, &p.Timezone, &enfStr, &isEnabledInt, &p.Version, &p.CreatedAt, &p.UpdatedAt); err == nil {
+					p.ID, _ = uuid.Parse(idStr)
+					p.UserID, _ = uuid.Parse(uidStr)
+					p.Period = Period(perStr)
+					p.EnforcementMode = EnforcementMode(enfStr)
+					p.IsEnabled = (isEnabledInt == 1)
+					if cron.Valid {
+						p.ScheduleCron = cron.String
+					}
+					if p.Version > maxVersion {
+						maxVersion = p.Version
+					}
+
+					// Fetch targets
+					tq := `SELECT id, policy_id, target_type, target_value FROM policy_targets WHERE policy_id = $1`
+					trows, terr := h.db.QueryContext(r.Context(), tq, p.ID.String())
+					if terr == nil {
+						p.Targets = []PolicyTarget{}
+						for trows.Next() {
+							var tidStr, tpidStr, ttypeStr, tval string
+							if err := trows.Scan(&tidStr, &tpidStr, &ttypeStr, &tval); err == nil {
+								tid, _ := uuid.Parse(tidStr)
+								tpid, _ := uuid.Parse(tpidStr)
+								p.Targets = append(p.Targets, PolicyTarget{
+									ID:          tid,
+									PolicyID:    tpid,
+									TargetType:  TargetType(ttypeStr),
+									TargetValue: tval,
+								})
+							}
+						}
+						trows.Close()
+					}
+
+					policiesList = append(policiesList, p)
+				}
+			}
+		}
+
+		if deviceIDStr != "" {
+			now := time.Now().UTC()
+			_, _ = h.db.ExecContext(r.Context(), `UPDATE sync_cursors SET last_policy_version = $1, last_sync_at = $2, updated_at = $2 WHERE device_id = $3`,
+				maxVersion, now, deviceIDStr)
+		}
+	}
+
+	now := time.Now().UTC()
+	cursor := fmt.Sprintf("cur_v%d_%d", maxVersion, now.Unix())
+
+	resp := PolicySyncResponse{
+		PolicyVersion: maxVersion,
+		Policies:      policiesList,
+		ServerTime:    now,
+		SyncCursor:    cursor,
+		Status:        "UP_TO_DATE",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Policy-Version", fmt.Sprintf("%d", maxVersion))
+	w.Header().Set("ETag", fmt.Sprintf(`"v%d"`, maxVersion))
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+

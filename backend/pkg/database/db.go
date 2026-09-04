@@ -153,7 +153,7 @@ func initSQLiteSchema(db *sql.DB) error {
 		id TEXT PRIMARY KEY,
 		user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 		device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
-		policy_id TEXT NOT NULL REFERENCES policies(id) ON DELETE CASCADE,
+		policy_id TEXT REFERENCES policies(id) ON DELETE CASCADE,
 		target_value TEXT NOT NULL,
 		timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
@@ -184,7 +184,65 @@ func initSQLiteSchema(db *sql.DB) error {
 		device_id TEXT,
 		action TEXT NOT NULL,
 		details TEXT,
+		actor_type TEXT DEFAULT 'USER',
+		actor_id TEXT,
+		resource_type TEXT,
+		resource_id TEXT,
+		request_id TEXT,
+		metadata TEXT,
 		timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS user_sessions (
+		id TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		refresh_token_hash TEXT NOT NULL,
+		user_agent TEXT,
+		ip_address TEXT,
+		expires_at DATETIME NOT NULL,
+		revoked_at DATETIME,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		last_used_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS device_public_identities (
+		id TEXT PRIMARY KEY,
+		device_id TEXT UNIQUE NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+		public_key TEXT NOT NULL,
+		key_algorithm TEXT NOT NULL DEFAULT 'Ed25519',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS device_credentials (
+		id TEXT PRIMARY KEY,
+		device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+		credential_hash TEXT NOT NULL,
+		credential_version INTEGER NOT NULL DEFAULT 1,
+		expires_at DATETIME NOT NULL,
+		revoked_at DATETIME,
+		last_used_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS pairing_sessions (
+		id TEXT PRIMARY KEY,
+		owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		code_hash TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'CREATED',
+		requested_device_metadata TEXT,
+		requested_public_key TEXT,
+		enrolled_device_id TEXT REFERENCES devices(id) ON DELETE SET NULL,
+		expires_at DATETIME NOT NULL,
+		consumed_at DATETIME,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS sync_cursors (
+		id TEXT PRIMARY KEY,
+		device_id TEXT UNIQUE NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+		last_policy_version INTEGER NOT NULL DEFAULT 0,
+		last_sync_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
 	`
 	_, err := db.Exec(schema)
@@ -196,6 +254,16 @@ func initSQLiteSchema(db *sql.DB) error {
 	_, _ = db.Exec("ALTER TABLE devices ADD COLUMN role TEXT NOT NULL DEFAULT 'PERSONAL';")
 	_, _ = db.Exec("ALTER TABLE devices ADD COLUMN is_managed INTEGER NOT NULL DEFAULT 0;")
 	_, _ = db.Exec("ALTER TABLE devices ADD COLUMN policy_version INTEGER NOT NULL DEFAULT 1;")
+	_, _ = db.Exec("ALTER TABLE devices ADD COLUMN client_type TEXT DEFAULT 'EXTENSION';")
+	_, _ = db.Exec("ALTER TABLE devices ADD COLUMN app_version TEXT DEFAULT '1.0.0';")
+	_, _ = db.Exec("ALTER TABLE devices ADD COLUMN protection_state TEXT DEFAULT 'PROTECTED';")
+	_, _ = db.Exec("ALTER TABLE devices ADD COLUMN revoked_at DATETIME;")
+	_, _ = db.Exec("ALTER TABLE audit_logs ADD COLUMN actor_type TEXT DEFAULT 'USER';")
+	_, _ = db.Exec("ALTER TABLE audit_logs ADD COLUMN actor_id TEXT;")
+	_, _ = db.Exec("ALTER TABLE audit_logs ADD COLUMN resource_type TEXT;")
+	_, _ = db.Exec("ALTER TABLE audit_logs ADD COLUMN resource_id TEXT;")
+	_, _ = db.Exec("ALTER TABLE audit_logs ADD COLUMN request_id TEXT;")
+	_, _ = db.Exec("ALTER TABLE audit_logs ADD COLUMN metadata TEXT;")
 	return nil
 }
 
@@ -311,9 +379,82 @@ func initPostgresSchema(db *sql.DB) error {
 		device_id UUID REFERENCES devices(id) ON DELETE SET NULL,
 		action VARCHAR(100) NOT NULL,
 		details TEXT,
+		actor_type VARCHAR(30) DEFAULT 'USER',
+		actor_id VARCHAR(100),
+		resource_type VARCHAR(50),
+		resource_id VARCHAR(100),
+		request_id VARCHAR(100),
+		metadata JSONB,
 		timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+
+	CREATE TABLE IF NOT EXISTS user_sessions (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		refresh_token_hash VARCHAR(255) NOT NULL,
+		user_agent VARCHAR(255),
+		ip_address VARCHAR(45),
+		expires_at TIMESTAMPTZ NOT NULL,
+		revoked_at TIMESTAMPTZ,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+
+	CREATE TABLE IF NOT EXISTS device_public_identities (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		device_id UUID UNIQUE NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+		public_key TEXT NOT NULL,
+		key_algorithm VARCHAR(30) NOT NULL DEFAULT 'Ed25519',
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+
+	CREATE TABLE IF NOT EXISTS device_credentials (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		device_id UUID NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+		credential_hash VARCHAR(255) NOT NULL,
+		credential_version INT NOT NULL DEFAULT 1,
+		expires_at TIMESTAMPTZ NOT NULL,
+		revoked_at TIMESTAMPTZ,
+		last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+
+	CREATE TABLE IF NOT EXISTS pairing_sessions (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		owner_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+		code_hash VARCHAR(255) NOT NULL,
+		status VARCHAR(30) NOT NULL DEFAULT 'CREATED',
+		requested_device_metadata JSONB,
+		requested_public_key TEXT,
+		enrolled_device_id UUID REFERENCES devices(id) ON DELETE SET NULL,
+		expires_at TIMESTAMPTZ NOT NULL,
+		consumed_at TIMESTAMPTZ,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+
+	CREATE TABLE IF NOT EXISTS sync_cursors (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		device_id UUID UNIQUE NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+		last_policy_version INT NOT NULL DEFAULT 0,
+		last_sync_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);
 	`
 	_, err := db.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Automated column additions for Postgres if migrating from Phase 1
+	_, _ = db.Exec("ALTER TABLE devices ADD COLUMN IF NOT EXISTS client_type VARCHAR(30) DEFAULT 'EXTENSION';")
+	_, _ = db.Exec("ALTER TABLE devices ADD COLUMN IF NOT EXISTS app_version VARCHAR(30) DEFAULT '1.0.0';")
+	_, _ = db.Exec("ALTER TABLE devices ADD COLUMN IF NOT EXISTS protection_state VARCHAR(30) DEFAULT 'PROTECTED';")
+	_, _ = db.Exec("ALTER TABLE devices ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;")
+	_, _ = db.Exec("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS actor_type VARCHAR(30) DEFAULT 'USER';")
+	_, _ = db.Exec("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS actor_id VARCHAR(100);")
+	_, _ = db.Exec("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS resource_type VARCHAR(50);")
+	_, _ = db.Exec("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS resource_id VARCHAR(100);")
+	_, _ = db.Exec("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS request_id VARCHAR(100);")
+	_, _ = db.Exec("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS metadata JSONB;")
+	return nil
 }

@@ -21,9 +21,17 @@ class DNRPolicyCompiler {
    * @param {Object} todayUsage - Map of target -> consumed seconds
    * @returns {Array<Object>} Array of DNR Rule objects
    */
+  static getDeterministicRuleId(key) {
+    let hash = 5381;
+    for (let i = 0; i < key.length; i++) {
+      hash = ((hash << 5) + hash) + key.charCodeAt(i);
+      hash = hash & 0x7fffffff;
+    }
+    return (hash % 900000) + 1;
+  }
+
   static compileDynamicRules(policies, todayUsage = {}) {
     const rules = [];
-    let ruleId = 1;
 
     for (const policy of policies || []) {
       if (policy.isEnabled === false) continue;
@@ -51,7 +59,6 @@ class DNRPolicyCompiler {
         if (targetType === 'WEBSITE' || targetType === 'DOMAIN') {
           domain = targetValue.trim().toLowerCase().replace(/^www\./, '');
         } else if (targetType === 'CATEGORY') {
-          // Category compilation expanded below
           continue;
         }
 
@@ -65,10 +72,12 @@ class DNRPolicyCompiler {
           }
         }
 
+        const stableRuleId = this.getDeterministicRuleId(`${policy.id || domain}:${domain}:${isAllow ? 'allow' : 'block'}`);
+
         if (isAllow) {
           // Declarative ALLOW rule (type: "allow")
           rules.push({
-            id: ruleId++,
+            id: stableRuleId,
             priority: priority,
             action: { type: 'allow' },
             condition: {
@@ -79,11 +88,11 @@ class DNRPolicyCompiler {
         } else {
           // Declarative REDIRECT / BLOCK rule
           const blockUrl = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.getURL
-            ? chrome.runtime.getURL(`pages/block.html?target=${encodeURIComponent(domain)}&reason=Daily%20attention%20budget%20reached&policy=${encodeURIComponent(policy.name)}`)
+            ? chrome.runtime.getURL(`pages/block.html?target=${encodeURIComponent(domain)}&reason=Daily%20attention%20budget%20reached&policy=${encodeURIComponent(policy.name || 'Policy')}`)
             : `/pages/block.html?target=${encodeURIComponent(domain)}`;
 
           rules.push({
-            id: ruleId++,
+            id: stableRuleId,
             priority: priority,
             action: {
               type: 'redirect',

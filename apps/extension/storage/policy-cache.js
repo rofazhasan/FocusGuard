@@ -12,6 +12,7 @@ class PolicyCache {
     this.STORAGE_KEY_USAGE = 'fg_today_usage';
     this.STORAGE_KEY_QUEUE = 'fg_offline_queue';
     this.STORAGE_KEY_FOCUS = 'fg_focus_session';
+    this.STORAGE_KEY_LAST_SYNCED = 'fg_last_synced_usage';
   }
 
   async getStoredData() {
@@ -22,14 +23,16 @@ class PolicyCache {
           this.STORAGE_KEY_VERSION,
           this.STORAGE_KEY_USAGE,
           this.STORAGE_KEY_QUEUE,
-          this.STORAGE_KEY_FOCUS
+          this.STORAGE_KEY_FOCUS,
+          this.STORAGE_KEY_LAST_SYNCED
         ], (items) => {
           resolve({
             policies: items[this.STORAGE_KEY_POLICIES] || [],
             version: items[this.STORAGE_KEY_VERSION] || 1,
             todayUsage: items[this.STORAGE_KEY_USAGE] || {},
             offlineQueue: items[this.STORAGE_KEY_QUEUE] || [],
-            focusSession: items[this.STORAGE_KEY_FOCUS] || null
+            focusSession: items[this.STORAGE_KEY_FOCUS] || null,
+            lastSyncedUsage: items[this.STORAGE_KEY_LAST_SYNCED] || {}
           });
         });
       });
@@ -41,7 +44,8 @@ class PolicyCache {
       version: 1,
       todayUsage: {},
       offlineQueue: [],
-      focusSession: null
+      focusSession: null,
+      lastSyncedUsage: {}
     };
   }
 
@@ -70,6 +74,12 @@ class PolicyCache {
     }
   }
 
+  async setLastSyncedUsage(usageMap) {
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+      await chrome.storage.local.set({ [this.STORAGE_KEY_LAST_SYNCED]: usageMap });
+    }
+  }
+
   async setFocusSession(session) {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       await chrome.storage.local.set({ [this.STORAGE_KEY_FOCUS]: session });
@@ -79,6 +89,10 @@ class PolicyCache {
   async enqueueOfflineEvent(event) {
     const current = await this.getStoredData();
     const queue = current.offlineQueue || [];
+    // Bounded FIFO: max 500 events to prevent memory/storage exhaustion
+    if (queue.length >= 500) {
+      queue.shift();
+    }
     queue.push(event);
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       await chrome.storage.local.set({ [this.STORAGE_KEY_QUEUE]: queue });

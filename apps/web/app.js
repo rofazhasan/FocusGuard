@@ -212,8 +212,15 @@ function handleWebSocketEvent(msg) {
     triggerLockoutScreen(payload.targetValue, payload.limitSeconds, payload.currentUsage);
     refreshAllData();
     fetchAuditLogs();
+  } else if (msg.event === "PAIRING_REQUEST_RECEIVED") {
+    const payload = msg.payload;
+    showPendingPairingApproval(payload);
   } else if (msg.event === "DEVICE_ENROLLED") {
     alert(`🎉 New device enrolled: ${msg.payload.deviceName} (${msg.payload.platform})`);
+    hidePendingPairingApproval();
+    refreshAllData();
+    fetchAuditLogs();
+  } else if (msg.event === "DEVICE_REVOKED") {
     refreshAllData();
     fetchAuditLogs();
   } else if (msg.event === "POLICY_UPDATED" || msg.event === "POLICY_DELETED") {
@@ -322,22 +329,46 @@ function renderDevicesUI() {
 
   countBadge.innerText = `${state.devices.length} Devices`;
   container.innerHTML = state.devices.map(dev => {
-    const icon = dev.platform === "MACOS" ? "💻" : "📱";
+    let icon = "💻";
+    let platformLabel = "macOS";
+    if (dev.platform === "ANDROID") { icon = "📱"; platformLabel = "Android"; }
+    else if (dev.platform === "WINDOWS") { icon = "🖥️"; platformLabel = "Windows"; }
+    else if (dev.platform === "EXTENSION" || dev.platform === "BROWSER") { icon = "🧩"; platformLabel = "Extension"; }
+
+    let statusBadge = `<span class="badge badge-online">ONLINE</span>`;
+    let isRevoked = dev.status === "REVOKED";
+    if (isRevoked) {
+      statusBadge = `<span class="badge badge-revoked">REVOKED</span>`;
+    } else if (dev.status === "OFFLINE") {
+      statusBadge = `<span class="badge badge-offline">OFFLINE</span>`;
+    }
+
     const roleBadge = dev.role === "OWNER" 
       ? `<span class="badge badge-blue">Owner Node</span>`
       : `<span class="badge badge-purple">Managed Node</span>`;
-    const lastSeen = dev.lastSeenAt ? new Date(dev.lastSeenAt).toLocaleTimeString() : "Online";
+    const lastSeen = dev.lastSeenAt ? new Date(dev.lastSeenAt).toLocaleTimeString() : "Just now";
+    const appVer = dev.appVersion || "1.0.0";
+    const polVer = dev.policyVersion || 1;
+
+    const revokeBtn = !isRevoked
+      ? `<button class="btn-danger-sm" onclick="revokeDevice('${dev.id}', '${escapeHtml(dev.deviceName)}')">Revoke</button>`
+      : `<span class="text-small text-muted">Access Blocked</span>`;
 
     return `
-      <div class="device-item">
-        <div class="device-info">
-          <span style="font-size: 24px;">${icon}</span>
+      <div class="device-item" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; margin-bottom: 8px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);">
+        <div class="device-info" style="display: flex; align-items: center; gap: 14px;">
+          <span style="font-size: 26px;">${icon}</span>
           <div>
-            <div class="device-name">${escapeHtml(dev.deviceName)} ${roleBadge}</div>
-            <div class="text-small text-muted">${escapeHtml(dev.osVersion || dev.platform)} • Policy v${dev.policyVersion || 1} • Last seen: ${lastSeen}</div>
+            <div class="device-name" style="font-weight: 600; font-size: 15px;">${escapeHtml(dev.deviceName)} ${roleBadge} ${statusBadge}</div>
+            <div class="text-small text-muted" style="margin-top: 3px;">
+              ${platformLabel} • App v${appVer} • Policy v${polVer} • Last seen: ${lastSeen}
+            </div>
           </div>
         </div>
-        <span class="device-status">PROTECTED</span>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="device-status" style="font-size: 11px; font-weight: 700; color: ${isRevoked ? '#ef4444' : '#10b981'};">${isRevoked ? 'REVOKED' : 'PROTECTED'}</span>
+          ${revokeBtn}
+        </div>
       </div>
     `;
   }).join("");
@@ -346,8 +377,8 @@ function renderDevicesUI() {
   if (healthBadges) {
     healthBadges.innerHTML = state.devices.map(dev => `
       <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 10px;">
-        <div style="font-size: 11px; color: #94a3b8;">${escapeHtml(dev.deviceName)} (${escapeHtml(dev.role || "NODE")})</div>
-        <span class="badge badge-green mt-1">100% HEALTHY</span>
+        <div style="font-size: 11px; color: #94a3b8;">${escapeHtml(dev.deviceName)}</div>
+        <span class="badge ${dev.status === 'REVOKED' ? 'badge-revoked' : 'badge-green'} mt-1">${dev.status === 'REVOKED' ? 'REVOKED' : '100% HEALTHY'}</span>
       </div>
     `).join("");
   }
@@ -467,37 +498,151 @@ function renderAuditLogsUI() {
   }).join("");
 }
 
-// 5. Device Enrollment Pairing Logic
+// 5. Phase 2 Device Enrollment Pairing Logic
+state.activePairingSessionId = null;
+state.pairingPollInterval = null;
+
 async function requestPairingCode() {
-  const deviceName = document.getElementById("pair-device-name-input").value || "Student Android Tablet";
-  const role = document.getElementById("pair-role-input").value || "MANAGED_USER";
+  const deviceName = document.getElementById("pair-device-name-input")?.value || "New Device";
+  hidePendingPairingApproval();
 
   try {
-    const res = await fetch(`${API_BASE}/enrollment/create`, {
+    const res = await fetch(`${API_BASE}/pairing/sessions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${state.token}`
       },
-      body: JSON.stringify({
-        deviceName: deviceName,
-        targetRole: role
-      })
+      body: JSON.stringify({ deviceName })
     });
 
     if (res.ok) {
       const data = await res.json();
+      state.activePairingSessionId = data.sessionId;
       state.activePairingCode = data.pairingCode;
       state.pairingSecondsLeft = data.expiresInSec || 300;
 
       document.getElementById("display-pairing-code").innerText = data.pairingCode;
       startPairingCountdown();
+      startPairingPolling();
       await fetchAuditLogs();
     }
   } catch (e) {
     console.error("Pairing code error:", e);
   }
 }
+
+function startPairingPolling() {
+  clearInterval(state.pairingPollInterval);
+  if (!state.activePairingSessionId) return;
+
+  state.pairingPollInterval = setInterval(async () => {
+    if (!state.activePairingSessionId || state.pairingSecondsLeft <= 0) {
+      clearInterval(state.pairingPollInterval);
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/pairing/sessions/${state.activePairingSessionId}`);
+      if (res.ok) {
+        const detail = await res.json();
+        if (detail.status === "PENDING_APPROVAL" && detail.requestedDeviceMetadata) {
+          showPendingPairingApproval(detail.requestedDeviceMetadata);
+        } else if (detail.status === "APPROVED" || detail.status === "CONSUMED") {
+          hidePendingPairingApproval();
+          clearInterval(state.pairingPollInterval);
+          clearInterval(state.pairingTimerInterval);
+          document.getElementById("modal-pair").style.display = "none";
+          refreshAllData();
+        }
+      }
+    } catch (err) {
+      // Background poll silently retry
+    }
+  }, 1500);
+}
+
+function showPendingPairingApproval(metadata) {
+  const card = document.getElementById("pairing-pending-approval-card");
+  if (!card) return;
+
+  document.getElementById("pending-dev-name").innerText = metadata.deviceName || "Unidentified Device";
+  document.getElementById("pending-dev-platform").innerText = metadata.platform || "UNKNOWN";
+  document.getElementById("pending-dev-type").innerText = metadata.clientType || "EXTENSION";
+  document.getElementById("pending-dev-version").innerText = metadata.appVersion || "1.0.0";
+  document.getElementById("pending-dev-time").innerText = metadata.requestedAt ? new Date(metadata.requestedAt).toLocaleTimeString() : "Just now";
+
+  card.style.display = "block";
+}
+
+function hidePendingPairingApproval() {
+  const card = document.getElementById("pairing-pending-approval-card");
+  if (card) card.style.display = "none";
+}
+
+async function approvePairing() {
+  if (!state.activePairingSessionId) return;
+  try {
+    const res = await fetch(`${API_BASE}/pairing/sessions/${state.activePairingSessionId}/approve`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${state.token}` }
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      alert(`✅ Approved device enrollment for "${data.deviceName || 'Device'}"!`);
+      hidePendingPairingApproval();
+      clearInterval(state.pairingPollInterval);
+      clearInterval(state.pairingTimerInterval);
+      document.getElementById("modal-pair").style.display = "none";
+      await refreshAllData();
+      await fetchAuditLogs();
+    } else {
+      const err = await res.json();
+      alert(`Approval error: ${err.error?.message || 'Failed to approve'}`);
+    }
+  } catch (err) {
+    console.error("Failed to approve pairing:", err);
+  }
+}
+
+async function rejectPairing() {
+  if (!state.activePairingSessionId) return;
+  try {
+    await fetch(`${API_BASE}/pairing/sessions/${state.activePairingSessionId}/reject`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${state.token}` }
+    });
+    hidePendingPairingApproval();
+    alert("Pairing request rejected.");
+  } catch (err) {
+    console.error("Failed to reject pairing:", err);
+  }
+}
+
+window.revokeDevice = async function(deviceId, deviceName) {
+  if (!confirm(`Are you sure you want to revoke "${deviceName}"?\n\nThis device will be immediately disconnected and blocked from all cloud sync.`)) {
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/devices/${deviceId}/revoke`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${state.token}` }
+    });
+
+    if (res.ok) {
+      alert(`✓ Device "${deviceName}" has been revoked.`);
+      await refreshAllData();
+      await fetchAuditLogs();
+    } else {
+      const err = await res.json();
+      alert(`Revocation failed: ${err.error?.message || 'Error revoking device'}`);
+    }
+  } catch (err) {
+    console.error("Revoke error:", err);
+  }
+};
 
 function startPairingCountdown() {
   clearInterval(state.pairingTimerInterval);
@@ -511,47 +656,11 @@ function startPairingCountdown() {
       timerDisplay.innerText = `Valid for ${m}:${String(s).padStart(2, '0')} minutes`;
     } else {
       clearInterval(state.pairingTimerInterval);
+      clearInterval(state.pairingPollInterval);
       timerDisplay.innerText = "Code expired. Generate a new code.";
       document.getElementById("display-pairing-code").innerText = "FG-EXPIRED";
     }
   }, 1000);
-}
-
-// Simulated Device Claim (mimics a student device claiming the code)
-async function simulateDeviceClaim() {
-  if (!state.activePairingCode || state.pairingSecondsLeft <= 0) {
-    alert("Please generate a valid pairing code first.");
-    return;
-  }
-
-  const deviceName = document.getElementById("pair-device-name-input").value || "Student Android Tablet";
-
-  try {
-    const res = await fetch(`${API_BASE}/enrollment/claim`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        pairingCode: state.activePairingCode,
-        deviceName: deviceName,
-        platform: "ANDROID",
-        osVersion: "Android 15 (API 35)"
-      })
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      alert(`✅ Device "${data.deviceName}" successfully enrolled with role ${data.role}!`);
-      document.getElementById("modal-pair").style.display = "none";
-      clearInterval(state.pairingTimerInterval);
-      await refreshAllData();
-      await fetchAuditLogs();
-    } else {
-      const errData = await res.json();
-      alert(`Claim failed: ${errData.error || "Unknown error"}`);
-    }
-  } catch (e) {
-    console.error("Claim error:", e);
-  }
 }
 
 // 6. Scoped Policy Creation
@@ -771,17 +880,22 @@ function setupEventListeners() {
   document.getElementById("btn-close-pair-modal").addEventListener("click", () => {
     document.getElementById("modal-pair").style.display = "none";
     clearInterval(state.pairingTimerInterval);
+    clearInterval(state.pairingPollInterval);
   });
   document.getElementById("btn-cancel-pair").addEventListener("click", () => {
     document.getElementById("modal-pair").style.display = "none";
     clearInterval(state.pairingTimerInterval);
+    clearInterval(state.pairingPollInterval);
   });
   document.getElementById("btn-generate-code").addEventListener("click", () => {
     requestPairingCode();
   });
-  document.getElementById("btn-simulate-claim").addEventListener("click", () => {
-    simulateDeviceClaim();
-  });
+  
+  const approveBtn = document.getElementById("btn-approve-pairing");
+  if (approveBtn) approveBtn.addEventListener("click", approvePairing);
+
+  const rejectBtn = document.getElementById("btn-reject-pairing");
+  if (rejectBtn) rejectBtn.addEventListener("click", rejectPairing);
 
   // Policy Modal
   document.getElementById("btn-new-policy").addEventListener("click", () => {
@@ -797,7 +911,7 @@ function setupEventListeners() {
     const name = document.getElementById("policy-name-input").value;
     const targetType = document.getElementById("policy-target-type").value;
     const targetVal = document.getElementById("policy-target-val").value;
-    const mins = parseInt(document.getElementById("policy-limit-input").value, 10);
+    const mins = parseFloat(document.getElementById("policy-limit-input").value);
     const mode = document.getElementById("policy-mode-input").value;
     const scope = document.getElementById("policy-device-scope").value;
 
@@ -822,7 +936,7 @@ function setupEventListeners() {
         },
         body: JSON.stringify({
           name: name,
-          limitSeconds: mins * 60,
+          limitSeconds: Math.max(1, Math.round(mins * 60)),
           period: "DAILY",
           timezone: "UTC",
           enforcementMode: mode,

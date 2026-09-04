@@ -1,8 +1,10 @@
 package events
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,14 +26,16 @@ type EventMessage struct {
 }
 
 type Client struct {
-	UserID uuid.UUID
-	Conn   *websocket.Conn
-	Send   chan EventMessage
+	UserID   uuid.UUID
+	DeviceID uuid.UUID
+	Conn     *websocket.Conn
+	Send     chan EventMessage
 }
 
 type Hub struct {
 	clients                map[*Client]bool
 	userMap                map[uuid.UUID]map[*Client]bool
+	deviceMap              map[uuid.UUID]map[*Client]bool
 	lastExtensionHeartbeat map[uuid.UUID]time.Time
 	register               chan *Client
 	unregister             chan *Client
@@ -46,6 +50,7 @@ func NewHub() *Hub {
 	return &Hub{
 		clients:                make(map[*Client]bool),
 		userMap:                make(map[uuid.UUID]map[*Client]bool),
+		deviceMap:              make(map[uuid.UUID]map[*Client]bool),
 		lastExtensionHeartbeat: make(map[uuid.UUID]time.Time),
 		register:               make(chan *Client),
 		unregister:             make(chan *Client),
@@ -88,8 +93,15 @@ func (h *Hub) Run() {
 				h.userMap[client.UserID] = make(map[*Client]bool)
 			}
 			h.userMap[client.UserID][client] = true
+
+			if client.DeviceID != uuid.Nil {
+				if _, exists := h.deviceMap[client.DeviceID]; !exists {
+					h.deviceMap[client.DeviceID] = make(map[*Client]bool)
+				}
+				h.deviceMap[client.DeviceID][client] = true
+			}
 			h.mu.Unlock()
-			logger.Info("WebSocket client registered", "userID", client.UserID)
+			logger.Info("WebSocket client registered", "userID", client.UserID, "deviceID", client.DeviceID)
 
 		case client := <-h.unregister:
 			h.mu.Lock()
@@ -100,6 +112,14 @@ func (h *Hub) Run() {
 					delete(uClients, client)
 					if len(uClients) == 0 {
 						delete(h.userMap, client.UserID)
+					}
+				}
+				if client.DeviceID != uuid.Nil {
+					if dClients, exists := h.deviceMap[client.DeviceID]; exists {
+						delete(dClients, client)
+						if len(dClients) == 0 {
+							delete(h.deviceMap, client.DeviceID)
+						}
 					}
 				}
 			}
@@ -131,7 +151,30 @@ func (h *Hub) BroadcastToUser(userID uuid.UUID, msg EventMessage) {
 	}{UserID: userID, Message: msg}
 }
 
-func (h *Hub) ServeWS(tokenService *auth.TokenService, w http.ResponseWriter, r *http.Request) {
+func (h *Hub) DisconnectDevice(deviceID uuid.UUID) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if clients, exists := h.deviceMap[deviceID]; exists {
+		for client := range clients {
+			_ = client.Conn.WriteJSON(EventMessage{
+				Event: "DEVICE_REVOKED",
+				Payload: map[string]interface{}{
+					"deviceId": deviceID.String(),
+					"message":  "Device access permanently revoked by owner",
+				},
+			})
+			_ = client.Conn.Close()
+			delete(h.clients, client)
+			if uClients, uExists := h.userMap[client.UserID]; uExists {
+				delete(uClients, client)
+			}
+		}
+		delete(h.deviceMap, deviceID)
+	}
+}
+
+func (h *Hub) ServeWS(tokenService *auth.TokenService, db *sql.DB, w http.ResponseWriter, r *http.Request) {
 	tokenStr := r.URL.Query().Get("token")
 	if tokenStr == "" {
 		tokenStr = r.Header.Get("Sec-WebSocket-Protocol")
@@ -141,14 +184,31 @@ func (h *Hub) ServeWS(tokenService *auth.TokenService, w http.ResponseWriter, r 
 	var err error
 	if tokenStr != "" {
 		claims, err = tokenService.ValidateToken(tokenStr)
+		if err != nil {
+			http.Error(w, `{"error":"Invalid or expired token"}`, http.StatusUnauthorized)
+			return
+		}
 	}
 
 	// Fallback to default owner user for zero-friction local extension connection
-	if claims == nil || err != nil {
+	if claims == nil {
 		defaultUserID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 		claims = &auth.Claims{
 			UserID: defaultUserID,
 			Email:  "demo@focusguard.local",
+			Role:   "OWNER",
+		}
+	}
+
+	deviceID := claims.DeviceID
+
+	// Check if device is revoked in database
+	if deviceID != uuid.Nil && db != nil {
+		var status string
+		err := db.QueryRowContext(r.Context(), `SELECT status FROM devices WHERE id = $1`, deviceID.String()).Scan(&status)
+		if err == nil && strings.ToUpper(status) == "REVOKED" {
+			http.Error(w, `{"error":"Device is revoked"}`, http.StatusForbidden)
+			return
 		}
 	}
 
@@ -159,9 +219,10 @@ func (h *Hub) ServeWS(tokenService *auth.TokenService, w http.ResponseWriter, r 
 	}
 
 	client := &Client{
-		UserID: claims.UserID,
-		Conn:   conn,
-		Send:   make(chan EventMessage, 256),
+		UserID:   claims.UserID,
+		DeviceID: deviceID,
+		Conn:     conn,
+		Send:     make(chan EventMessage, 256),
 	}
 
 	h.register <- client

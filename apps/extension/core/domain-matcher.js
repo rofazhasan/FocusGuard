@@ -18,19 +18,34 @@ class DomainMatcher {
     if (!raw || typeof raw !== 'string') return '';
     let str = raw.trim().toLowerCase();
 
-    // Strip protocol
+    // Use standard URL parser if possible
+    try {
+      const urlToParse = str.includes('://') ? str : `http://${str}`;
+      const parsed = new URL(urlToParse);
+      let host = parsed.hostname.toLowerCase();
+      if (host.startsWith('[') && host.endsWith(']')) {
+        return host;
+      }
+      host = host.replace(/\.+$/, '');
+      if (host) return host;
+    } catch (e) {}
+
+    // Fallback cleanup
     const protoIdx = str.indexOf('://');
     if (protoIdx !== -1) {
       str = str.substring(protoIdx + 3);
     }
-
-    // Strip path, query parameters, hash, or port
-    const pathIdx = str.search(/[/?#:]/);
+    const atIdx = str.indexOf('@');
+    if (atIdx !== -1) {
+      str = str.substring(atIdx + 1);
+    }
+    const pathIdx = str.search(/[/?#]/);
     if (pathIdx !== -1) {
       str = str.substring(0, pathIdx);
     }
-
-    // Strip trailing dots (FQDN format)
+    if (!str.startsWith('[')) {
+      str = str.split(':')[0];
+    }
     str = str.replace(/\.+$/, '');
 
     return str;

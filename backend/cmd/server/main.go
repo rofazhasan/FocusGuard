@@ -26,6 +26,7 @@ import (
 	"github.com/focusguard/focusguard/backend/internal/focus"
 	"github.com/focusguard/focusguard/backend/internal/health"
 	"github.com/focusguard/focusguard/backend/internal/middleware"
+	"github.com/focusguard/focusguard/backend/internal/pairing"
 	"github.com/focusguard/focusguard/backend/internal/policies"
 	"github.com/focusguard/focusguard/backend/internal/usage"
 	"github.com/focusguard/focusguard/backend/pkg/database"
@@ -79,7 +80,8 @@ func main() {
 
 	analyticsHandler := analytics.NewHandler(db)
 	authHandler := auth.NewHandler(db, tokenService)
-	devicesHandler := devices.NewHandler(db)
+	devicesHandler := devices.NewHandler(db, wsHub)
+	pairingHandler := pairing.NewHandler(db, tokenService, wsHub)
 	policiesHandler := policies.NewHandler(db, wsHub)
 	usageHandler := usage.NewHandler(db, policyEvaluator, wsHub)
 	focusHandler := focus.NewHandler(db, wsHub)
@@ -87,6 +89,7 @@ func main() {
 	commandsHandler := commands.NewHandler(db, wsHub)
 	auditHandler := audit.NewHandler(db)
 	protectionHandler := health.NewProtectionHandler(db, wsHub)
+	batchEventsHandler := events.NewBatchHandler(db, wsHub)
 
 	// Ensure default primary owner exists for instant zero-friction usability
 	defaultUserID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
@@ -111,8 +114,8 @@ func main() {
 
 		osVer := fmt.Sprintf("%s (%s)", runtime.GOOS, runtime.GOARCH)
 
-		_, _ = db.Exec(`INSERT INTO devices (id, user_id, device_name, platform, os_version, role, is_managed, status, last_seen_at, created_at)
-		                VALUES ($1, $2, $3, $4, $5, 'OWNER', 0, 'ONLINE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		_, _ = db.Exec(`INSERT INTO devices (id, user_id, device_name, platform, client_type, os_version, app_version, role, is_managed, status, protection_state, policy_version, last_seen_at, created_at)
+		                VALUES ($1, $2, $3, $4, 'MACOS_AGENT', $5, '1.0.0', 'OWNER', 0, 'ACTIVE', 'PROTECTED', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		                ON CONFLICT (id) DO NOTHING`, defaultDeviceID.String(), defaultUserID.String(), hostName, platform, osVer)
 	}
 
@@ -121,9 +124,14 @@ func main() {
 	activityCollector.Start()
 	defer activityCollector.Stop()
 
+	// Rate Limiters
+	authLimiter := middleware.NewRateLimiter(20, time.Minute)
+	pairingLimiter := middleware.NewRateLimiter(30, time.Minute)
+
 	// HTTP Router (Chi)
 	r := chi.NewRouter()
 
+	r.Use(middleware.RequestIDMiddleware)
 	r.Use(chiMiddleware.Logger)
 	r.Use(chiMiddleware.Recoverer)
 	r.Use(chiMiddleware.Timeout(30 * time.Second))
@@ -131,57 +139,112 @@ func main() {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
-		ExposedHeaders:   []string{"Link", "X-Server-Timestamp"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Request-ID", "If-None-Match"},
+		ExposedHeaders:   []string{"Link", "X-Server-Timestamp", "X-Request-ID", "X-Policy-Version", "ETag"},
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
 
-	// Public Routes
+	// Public Health & Readiness
 	r.Get("/health", health.Handler)
-	r.Post("/api/v1/auth/register", authHandler.Register)
-	r.Post("/api/v1/auth/login", authHandler.Login)
-	r.Post("/api/v1/enrollment/claim", enrollmentHandler.ClaimEnrollment)
-
-	// Real-Time WebSocket Endpoint
-	r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
-		wsHub.ServeWS(tokenService, w, r)
+	r.Get("/ready", func(w http.ResponseWriter, r *http.Request) {
+		if db != nil {
+			if pingErr := db.Ping(); pingErr != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"status":"DOWN","reason":"Database unreachable"}`))
+				return
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"READY","database":"UP"}`))
 	})
 
-	// Protected Routes (JWT Auth)
+	// Public Auth Routes (with Rate Limiting)
+	r.Group(func(publicAuth chi.Router) {
+		publicAuth.Use(authLimiter)
+		publicAuth.Post("/api/v1/auth/register", authHandler.Register)
+		publicAuth.Post("/api/v1/auth/login", authHandler.Login)
+	})
+	r.Post("/api/v1/auth/refresh", authHandler.Refresh)
+	r.Post("/api/v1/auth/logout", authHandler.Logout)
+
+	// Public Pairing Client Routes (Device initiated enrollment request & status polling)
+	r.Group(func(pairRouter chi.Router) {
+		pairRouter.Use(pairingLimiter)
+		pairRouter.Post("/api/v1/pairing/sessions/{id}/request", pairingHandler.SubmitRequest)
+		pairRouter.Post("/api/v1/pairing/request", pairingHandler.SubmitRequest)
+	})
+	r.Get("/api/v1/pairing/sessions/{id}", pairingHandler.GetSession)
+	r.Get("/api/v1/pairing/sessions/{id}/status", pairingHandler.PollStatus)
+
+	// Legacy Enrollment Bridge (Phase 1 client compatibility)
+	r.Post("/api/v1/enrollment/claim", enrollmentHandler.ClaimEnrollment)
+
+	// Real-Time WebSocket Endpoint (with token verification & device revocation checking)
+	r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
+		wsHub.ServeWS(tokenService, db, w, r)
+	})
+
+	// Protected Routes (JWT User Auth - Owner operations)
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.AuthMiddleware(tokenService))
 
+		// User profile
+		r.Get("/api/v1/auth/me", authHandler.Me)
+
+		// Device Management (Owner)
 		r.Post("/api/v1/devices/register", devicesHandler.RegisterDevice)
 		r.Get("/api/v1/devices", devicesHandler.ListDevices)
+		r.Post("/api/v1/devices/{id}/revoke", devicesHandler.RevokeDevice)
 
+		// Pairing Management (Owner)
+		r.Post("/api/v1/pairing/sessions", pairingHandler.CreateSession)
+		r.Post("/api/v1/pairing/sessions/{id}/approve", pairingHandler.ApproveRequest)
+		r.Post("/api/v1/pairing/sessions/{id}/reject", pairingHandler.RejectRequest)
+		r.Post("/api/v1/pairing/sessions/{id}/cancel", pairingHandler.CancelSession)
+
+		// Legacy Enrollment (Owner)
 		r.Post("/api/v1/enrollment/create", enrollmentHandler.CreateEnrollment)
 		r.Get("/api/v1/enrollment/pending", enrollmentHandler.ListPendingEnrollments)
 
+		// Policies (Owner)
 		r.Post("/api/v1/policies", policiesHandler.CreatePolicy)
 		r.Get("/api/v1/policies", policiesHandler.ListPolicies)
 		r.Delete("/api/v1/policies/{id}", policiesHandler.DeletePolicy)
 		r.Post("/api/v1/policies/simulate", policiesHandler.SimulatePolicy)
 		r.Post("/api/v1/policies/explain", policiesHandler.ExplainPolicy)
 
+		// Commands & Audit
 		r.Post("/api/v1/commands/dispatch", commandsHandler.DispatchCommand)
 		r.Get("/api/v1/audit/logs", auditHandler.GetAuditLogs)
 
-		r.Post("/api/v1/usage/sync", usageHandler.SyncUsage)
-
+		// Fleet Health & Diagnostics
 		r.Get("/api/v1/health/fleet", protectionHandler.GetFleetHealth)
 		r.Post("/api/v1/health/tamper", protectionHandler.ReportTamperEvent)
 		r.Post("/api/v1/health/diagnostics", protectionHandler.RunDiagnostics)
 
+		// Analytics
 		r.Get("/api/v1/analytics/daily", analyticsHandler.GetDailyAnalytics)
 		r.Get("/api/v1/analytics/weekly", analyticsHandler.GetWeeklyAnalytics)
 		r.Get("/api/v1/analytics/timeline", analyticsHandler.GetTimeline)
 		r.Get("/api/v1/analytics/enforcement-timeline", analyticsHandler.GetEnforcementTimeline)
 		r.Get("/api/v1/analytics/recommendations", analyticsHandler.GetRecommendations)
 
+		// Focus Sessions
 		r.Post("/api/v1/focus/start", focusHandler.StartFocus)
 		r.Post("/api/v1/focus/end", focusHandler.EndFocus)
 		r.Get("/api/v1/focus/presets", focusHandler.GetFocusPresets)
+	})
+
+	// Device or User Authenticated Endpoints (Sync, Heartbeat, Events)
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.DeviceOrUserAuthMiddleware(db, tokenService))
+
+		r.Post("/api/v1/devices/{id}/heartbeat", devicesHandler.Heartbeat)
+		r.Get("/api/v1/device/policies/sync", policiesHandler.SyncDevicePolicies)
+		r.Post("/api/v1/usage/sync", usageHandler.SyncUsage)
+		r.Post("/api/v1/events/batch", batchEventsHandler.HandleBatchEvents)
 	})
 
 	server := &http.Server{

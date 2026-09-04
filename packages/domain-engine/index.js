@@ -27,35 +27,42 @@ class DomainEngine {
     if (!input || typeof input !== 'string') return '';
     let cleaned = input.trim().toLowerCase();
 
-    // If input lacks protocol, prepend dummy for URL parsing
-    if (!cleaned.includes('://')) {
-      // Strip path/query if present
-      const slashIdx = cleaned.indexOf('/');
-      if (slashIdx !== -1) cleaned = cleaned.substring(0, slashIdx);
-      const queryIdx = cleaned.indexOf('?');
-      if (queryIdx !== -1) cleaned = cleaned.substring(0, queryIdx);
-      const hashIdx = cleaned.indexOf('#');
-      if (hashIdx !== -1) cleaned = cleaned.substring(0, hashIdx);
-    } else {
-      try {
-        const parsed = new URL(cleaned);
-        cleaned = parsed.hostname;
-      } catch (e) {
-        // Fallback cleanup
-        cleaned = cleaned.replace(/^[a-zA-Z]+:\/\//, '').split('/')[0];
+    // Use URL parser if possible
+    try {
+      const urlToParse = cleaned.includes('://') ? cleaned : `http://${cleaned}`;
+      const parsed = new URL(urlToParse);
+      let host = parsed.hostname.toLowerCase();
+      // Handle IPv6 address directly
+      if (host.startsWith('[') && host.endsWith(']')) {
+        return host;
       }
+      // Strip trailing dots
+      host = host.replace(/\.+$/, '');
+      if (/^[a-z0-9.-]+$/.test(host)) {
+        return host;
+      }
+    } catch (e) {}
+
+    // Fallback cleanup
+    const protoIdx = cleaned.indexOf('://');
+    if (protoIdx !== -1) {
+      cleaned = cleaned.substring(protoIdx + 3);
     }
-
-    // Strip port if present (e.g. localhost:8080 or example.com:443)
-    cleaned = cleaned.split(':')[0];
-
-    // Strip trailing dot (DNS root)
-    if (cleaned.endsWith('.')) {
-      cleaned = cleaned.slice(0, -1);
+    const atIdx = cleaned.indexOf('@');
+    if (atIdx !== -1) {
+      cleaned = cleaned.substring(atIdx + 1);
     }
+    const pathIdx = cleaned.search(/[/?#]/);
+    if (pathIdx !== -1) {
+      cleaned = cleaned.substring(0, pathIdx);
+    }
+    // Only strip colon if not IPv6
+    if (!cleaned.startsWith('[')) {
+      cleaned = cleaned.split(':')[0];
+    }
+    cleaned = cleaned.replace(/\.+$/, '');
 
-    // Validate valid hostname characters
-    if (!/^[a-z0-9.-]+$/.test(cleaned)) {
+    if (!/^[a-z0-9.-]+$/.test(cleaned) && !(cleaned.startsWith('[') && cleaned.endsWith(']'))) {
       return '';
     }
 

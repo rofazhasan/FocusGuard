@@ -11,7 +11,7 @@ echo "==========================================================================
 WORKSPACE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$WORKSPACE_DIR"
 
-TOTAL_SUITES=7
+TOTAL_SUITES=8
 PASSED_SUITES=0
 
 echo -e "\n[1/$TOTAL_SUITES] Running Shared Domain Packages Test Suite (JavaScript)..."
@@ -41,6 +41,10 @@ PASSED_SUITES=$((PASSED_SUITES + 1))
 
 echo -e "\n[7/$TOTAL_SUITES] Running Go Cloud Backend Package Tests..."
 (cd backend && go test ./...)
+PASSED_SUITES=$((PASSED_SUITES + 1))
+
+echo -e "\n[8/$TOTAL_SUITES] Running Phase 2 Device Pairing & Persistent Credential E2E..."
+node tests/e2e/pairing_e2e_test.js
 PASSED_SUITES=$((PASSED_SUITES + 1))
 
 echo -e "\n================================================================================"

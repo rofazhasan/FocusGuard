@@ -522,6 +522,69 @@ body {
   margin-top: 10px;
 }
 
+/* Phase 2 Enhanced Device Cards and Pairing Styles */
+.badge-online { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+.badge-offline { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+.badge-revoked { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+
+.pairing-qr-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  padding: 10px;
+  border-radius: 12px;
+  margin: 12px auto;
+  width: 140px;
+  height: 140px;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+}
+
+.pending-approval-card {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(168, 85, 247, 0.15));
+  border: 1px solid #818cf8;
+  border-radius: 12px;
+  padding: 14px;
+  margin-top: 14px;
+  animation: pulse-border 2s infinite;
+}
+
+@keyframes pulse-border {
+  0% { border-color: #818cf8; }
+  50% { border-color: #ec4899; }
+  100% { border-color: #818cf8; }
+}
+
+.pending-header {
+  font-weight: 700;
+  font-size: 14px;
+  color: #a5b4fc;
+}
+
+.pending-meta {
+  font-size: 13px;
+  line-height: 1.6;
+  margin-top: 8px;
+  color: #e2e8f0;
+}
+
+.btn-danger-sm {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid #ef4444;
+  color: #f87171;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-danger-sm:hover {
+  background: #ef4444;
+  color: white;
+}
+
 .progress-bar-fill {
   height: 100%;
   border-radius: 4px;

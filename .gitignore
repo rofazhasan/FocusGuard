@@ -42,3 +42,9 @@ local.properties
 .env.local
 *.pem
 *.key
+.focusguard-device-credentials.json
+*.db
+*.db-wal
+*.db-shm
+tests/e2e/*.json
+tests/e2e/*.db*

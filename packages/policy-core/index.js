@@ -123,24 +123,11 @@ class PolicyCoreEngine {
     // 3. Sort by priority (highest priority first)
     matchedPolicies.sort((a, b) => (b.priority || 0) - (a.priority || 0));
 
-    // 4. Evaluate each policy according to action, schedule, and limits
+    // Phase 1: Explicit unconditional BLOCK, NETWORK_BLOCK, or FOCUS
     for (const policy of matchedPolicies) {
       const scheduleActive = this.isScheduleActive(policy.schedule, now);
-      if (!scheduleActive) {
-        continue; // Policy schedule is inactive at this time
-      }
+      if (!scheduleActive) continue;
 
-      // Explicit ALLOW action overrides lower priority blocks
-      if (policy.action === ActionType.ALLOW || policy.action === 'ALLOW') {
-        return {
-          decision: DecisionType.ALLOW,
-          reason: 'EXPLICIT_ALLOW_RULE',
-          policyId: policy.id,
-          policyVersion: policy.version
-        };
-      }
-
-      // Explicit unconditional BLOCK action
       if (policy.action === ActionType.BLOCK || policy.action === 'BLOCK' ||
           policy.action === ActionType.NETWORK_BLOCK || policy.action === 'NETWORK_BLOCK') {
         return {
@@ -150,13 +137,25 @@ class PolicyCoreEngine {
           policyVersion: policy.version
         };
       }
+      if (policy.action === ActionType.FOCUS || policy.action === 'FOCUS') {
+        return {
+          decision: DecisionType.BLOCK,
+          reason: 'FOCUS_MODE_ACTIVE',
+          policyId: policy.id,
+          policyVersion: policy.version
+        };
+      }
+    }
 
-      // TIME_LIMIT or APP_LIMIT evaluation
+    // Phase 2: Time Limit Exhaustion (budget reached)
+    for (const policy of matchedPolicies) {
+      const scheduleActive = this.isScheduleActive(policy.schedule, now);
+      if (!scheduleActive) continue;
+
       if (policy.action === ActionType.TIME_LIMIT || policy.action === 'TIME_LIMIT' ||
           policy.action === ActionType.APP_LIMIT || policy.action === 'APP_LIMIT') {
         const limitSeconds = policy.limit || 0;
-        
-        if (currentUsageSeconds >= limitSeconds) {
+        if (limitSeconds > 0 && currentUsageSeconds >= limitSeconds) {
           return {
             decision: DecisionType.BLOCK,
             reason: 'TIME_LIMIT_EXCEEDED',
@@ -165,44 +164,63 @@ class PolicyCoreEngine {
             usedSeconds: currentUsageSeconds,
             limitSeconds: limitSeconds
           };
-        } else if (currentUsageSeconds >= limitSeconds * 0.9) {
-          return {
-            decision: DecisionType.WARN,
-            reason: 'TIME_LIMIT_90_PERCENT',
-            policyId: policy.id,
-            policyVersion: policy.version,
-            usedSeconds: currentUsageSeconds,
-            limitSeconds: limitSeconds
-          };
-        } else if (currentUsageSeconds >= limitSeconds * 0.8) {
-          return {
-            decision: DecisionType.WARN,
-            reason: 'TIME_LIMIT_80_PERCENT',
-            policyId: policy.id,
-            policyVersion: policy.version,
-            usedSeconds: currentUsageSeconds,
-            limitSeconds: limitSeconds
-          };
-        } else {
-          return {
-            decision: DecisionType.ALLOW,
-            reason: 'WITHIN_TIME_LIMIT',
-            policyId: policy.id,
-            policyVersion: policy.version,
-            usedSeconds: currentUsageSeconds,
-            limitSeconds: limitSeconds
-          };
         }
       }
+    }
 
-      // Focus Mode session
-      if (policy.action === ActionType.FOCUS || policy.action === 'FOCUS') {
+    // Phase 3: Explicit ALLOW action
+    for (const policy of matchedPolicies) {
+      const scheduleActive = this.isScheduleActive(policy.schedule, now);
+      if (!scheduleActive) continue;
+
+      if (policy.action === ActionType.ALLOW || policy.action === 'ALLOW') {
         return {
-          decision: DecisionType.BLOCK,
-          reason: 'FOCUS_MODE_ACTIVE',
+          decision: DecisionType.ALLOW,
+          reason: 'EXPLICIT_ALLOW_RULE',
           policyId: policy.id,
           policyVersion: policy.version
         };
+      }
+    }
+
+    // Phase 4: Time Limit Warnings and In-Budget Allowance
+    for (const policy of matchedPolicies) {
+      const scheduleActive = this.isScheduleActive(policy.schedule, now);
+      if (!scheduleActive) continue;
+
+      if (policy.action === ActionType.TIME_LIMIT || policy.action === 'TIME_LIMIT' ||
+          policy.action === ActionType.APP_LIMIT || policy.action === 'APP_LIMIT') {
+        const limitSeconds = policy.limit || 0;
+        if (limitSeconds > 0) {
+          if (currentUsageSeconds >= limitSeconds * 0.9) {
+            return {
+              decision: DecisionType.WARN,
+              reason: 'TIME_LIMIT_90_PERCENT',
+              policyId: policy.id,
+              policyVersion: policy.version,
+              usedSeconds: currentUsageSeconds,
+              limitSeconds: limitSeconds
+            };
+          } else if (currentUsageSeconds >= limitSeconds * 0.8) {
+            return {
+              decision: DecisionType.WARN,
+              reason: 'TIME_LIMIT_80_PERCENT',
+              policyId: policy.id,
+              policyVersion: policy.version,
+              usedSeconds: currentUsageSeconds,
+              limitSeconds: limitSeconds
+            };
+          } else {
+            return {
+              decision: DecisionType.ALLOW,
+              reason: 'WITHIN_TIME_LIMIT',
+              policyId: policy.id,
+              policyVersion: policy.version,
+              usedSeconds: currentUsageSeconds,
+              limitSeconds: limitSeconds
+            };
+          }
+        }
       }
     }
 

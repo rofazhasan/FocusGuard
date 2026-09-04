@@ -78,11 +78,12 @@ const sessionTracker = new SessionTracker({
 });
 
 /**
- * Redirects tab to the FocusGuard block page.
+ * Redirects tab to the FocusGuard block page and emits an enforcement event.
  */
 function redirectToBlockPage(tabId, urlOrDomain, evalResult) {
+  const normDomain = typeof DomainMatcher !== 'undefined' ? DomainMatcher.normalizeDomain(urlOrDomain) : urlOrDomain;
   const blockUrl = chrome.runtime.getURL(
-    `pages/block.html?target=${encodeURIComponent(DomainMatcher.normalizeDomain(urlOrDomain))}` +
+    `pages/block.html?target=${encodeURIComponent(normDomain)}` +
     `&reason=${encodeURIComponent(evalResult.reason || 'Attention Budget Reached')}` +
     `&policy=${encodeURIComponent(evalResult.policyName || 'FocusGuard Policy')}` +
     `&used=${encodeURIComponent(evalResult.usedMinutes || 30)}` +
@@ -90,7 +91,60 @@ function redirectToBlockPage(tabId, urlOrDomain, evalResult) {
     `&reset=${encodeURIComponent(evalResult.nextReset || '12:00 AM')}`
   );
 
+  // Enqueue enforcement event for offline resilience and sync
+  const eventId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('evt_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9));
+  const blockEvent = {
+    id: eventId,
+    deviceId: '00000000-0000-0000-0000-000000000002',
+    eventType: 'DOMAIN_BLOCKED',
+    domain: normDomain,
+    reason: evalResult.reason || 'Attention budget reached',
+    timestamp: new Date().toISOString(),
+    metadata: {
+      policyName: evalResult.policyName,
+      usedMinutes: evalResult.usedMinutes,
+      limitMinutes: evalResult.limitMinutes
+    }
+  };
+
+  policyCache.enqueueOfflineEvent(blockEvent).catch((err) => {
+    console.warn('[FocusGuard Extension] Error enqueuing block event:', err);
+  });
+
+  // Attempt immediate flush if online
+  flushOfflineEvents().catch(() => {});
+
   chrome.tabs.update(tabId, { url: blockUrl });
+}
+
+/**
+ * Drains and synchronizes queued offline events to the backend with idempotency.
+ */
+async function flushOfflineEvents() {
+  try {
+    const cached = await policyCache.getStoredData();
+    const queue = cached.offlineQueue || [];
+    if (queue.length === 0) return;
+
+    const token = await getOrFetchAuthToken();
+    if (!token) return;
+
+    const res = await fetch(`${API_BASE}/events/batch`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ events: queue })
+    });
+
+    if (res.ok) {
+      await policyCache.drainOfflineQueue();
+      console.log(`[FocusGuard Extension] Flushed ${queue.length} offline events to cloud.`);
+    }
+  } catch (e) {
+    console.warn('[FocusGuard Extension] Flush offline events deferred (offline mode).');
+  }
 }
 
 /**
@@ -115,14 +169,17 @@ async function initializeExtension() {
   // 4. Connect real-time WebSocket hub
   await connectWebSocket();
 
-  // 5. Setup periodic usage sync alarm (every 1 minute)
+  // 5. Flush any offline events accumulated while worker was sleeping
+  await flushOfflineEvents();
+
+  // 6. Setup periodic usage sync alarm (every 1 minute)
   if (chrome.alarms) {
     chrome.alarms.create('fg_usage_sync', { periodInMinutes: 1 });
   }
 }
 
 /**
- * Fetches versioned policies from server.
+ * Fetches versioned policies from server with atomic verification.
  */
 async function fetchPoliciesFromServer() {
   try {
@@ -131,21 +188,29 @@ async function fetchPoliciesFromServer() {
     const resp = await fetch(`${API_BASE}/policies`, { headers, credentials: 'omit' });
     if (resp.ok) {
       const data = await resp.json();
-      const serverVersion = data.version || (data.length > 0 ? 2 : 1);
-      if (serverVersion >= currentPolicyVersion) {
-        currentPolicyVersion = serverVersion;
-        const policies = data.policies || data;
-        policyEngine.setPolicies(policies);
-        await policyCache.updatePolicies(policies, serverVersion);
+      const policies = Array.isArray(data) ? data : (data.policies || []);
+      const versionHeader = resp.headers.get('X-Policy-Version');
+      const serverVersion = versionHeader ? parseInt(versionHeader, 10) : (data.version || (currentPolicyVersion + 1));
 
-        // Compile and sync native browser DeclarativeNetRequest dynamic rules
-        if (typeof DNRPolicyCompiler !== 'undefined') {
-          const dynamicRules = DNRPolicyCompiler.compileDynamicRules(policies, policyEngine.todayUsage);
-          await DNRPolicyCompiler.syncWithBrowser(dynamicRules);
-        }
-
-        console.log(`[FocusGuard Extension] Applied synchronized policy v${serverVersion} with native DNR rules.`);
+      // Atomic Update: Compile rules BEFORE persisting or activating
+      let dynamicRules = [];
+      if (typeof DNRPolicyCompiler !== 'undefined') {
+        dynamicRules = DNRPolicyCompiler.compileDynamicRules(policies, policyEngine.todayUsage);
       }
+
+      const dnrSuccess = typeof DNRPolicyCompiler !== 'undefined'
+        ? await DNRPolicyCompiler.syncWithBrowser(dynamicRules)
+        : true;
+
+      if (!dnrSuccess && dynamicRules.length > 0) {
+        console.error('[FocusGuard Extension] DNR compile/sync failed; retaining working policy.');
+        return;
+      }
+
+      currentPolicyVersion = serverVersion;
+      policyEngine.setPolicies(policies);
+      await policyCache.updatePolicies(policies, serverVersion);
+      console.log(`[FocusGuard Extension] Synchronized policy v${serverVersion} (${policies.length} policies).`);
     }
   } catch (err) {
     console.warn('[FocusGuard Extension] Backend unreachable; operating in 100% offline cache mode.', err);
@@ -300,28 +365,54 @@ if (chrome.idle) {
   });
 }
 
-// Periodic Alarm for Usage Synchronization
+// Periodic Alarm for Incremental Usage Synchronization
 if (chrome.alarms) {
   chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name === 'fg_usage_sync') {
       try {
+        const token = await getOrFetchAuthToken();
         const cached = await policyCache.getStoredData();
-        const usageDeltas = Object.entries(cached.todayUsage).map(([target, sec]) => ({
-          targetValue: target,
-          durationSeconds: sec,
-          date: new Date().toISOString().split('T')[0]
-        }));
+        const todayUsage = cached.todayUsage || {};
+        const lastSynced = cached.lastSyncedUsage || {};
+        const newSynced = { ...lastSynced };
+
+        const usageDeltas = [];
+        const todayStr = new Date().toISOString().split('T')[0];
+
+        for (const [target, sec] of Object.entries(todayUsage)) {
+          const prev = lastSynced[target] || 0;
+          const delta = sec - prev;
+          if (delta > 0) {
+            usageDeltas.push({
+              targetValue: target,
+              durationSeconds: delta,
+              date: todayStr
+            });
+            newSynced[target] = sec;
+          }
+        }
 
         if (usageDeltas.length > 0) {
-          await fetch(`${API_BASE}/usage/sync`, {
+          const headers = { 'Content-Type': 'application/json' };
+          if (token) headers['Authorization'] = `Bearer ${token}`;
+
+          const res = await fetch(`${API_BASE}/usage/sync`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: headers,
             body: JSON.stringify({
               deviceId: '00000000-0000-0000-0000-000000000002',
               usageDeltas: usageDeltas
             })
           });
+
+          if (res.ok) {
+            await policyCache.setLastSyncedUsage(newSynced);
+            console.log(`[FocusGuard Extension] Incremental usage synced (${usageDeltas.length} targets).`);
+          }
         }
+
+        // Also flush any pending offline events
+        await flushOfflineEvents();
       } catch (err) {
         console.warn('[FocusGuard Extension] Periodic sync skipped (offline mode).');
       }
