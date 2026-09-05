@@ -11,7 +11,7 @@ echo "==========================================================================
 WORKSPACE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$WORKSPACE_DIR"
 
-TOTAL_SUITES=8
+TOTAL_SUITES=9
 PASSED_SUITES=0
 
 echo -e "\n[1/$TOTAL_SUITES] Running Shared Domain Packages Test Suite (JavaScript)..."
@@ -50,6 +50,11 @@ fi
 node tests/e2e/pairing_e2e_test.js
 PASSED_SUITES=$((PASSED_SUITES + 1))
 
+echo -e "\n[9/$TOTAL_SUITES] Running Hostile Adversarial Security QA Breaker Battery..."
+node tests/qa_security_breaker_suite.js
+PASSED_SUITES=$((PASSED_SUITES + 1))
+
 echo -e "\n================================================================================"
 echo "  ✅ ALL $PASSED_SUITES / $TOTAL_SUITES FOCUSGUARD TEST SUITES PASSED SUCCESSFULLY (100%)"
 echo "================================================================================"
+
