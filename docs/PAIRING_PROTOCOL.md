@@ -3,7 +3,52 @@
 ## 1. Overview
 The FocusGuard Pairing Protocol establishes a cryptographic trust relationship between a new client device and an account owner without exposing credentials over insecure channels.
 
-## 2. Core Security Invariants
+## 2. Dashboard Auth & Pairing Service Architecture
+
+```
+              ┌────────────────────┐
+              │    DASHBOARD       │
+              │    USER AUTH       │
+              └─────────┬──────────┘
+                        │
+                        ▼
+                   USER SESSION
+                        │
+       ┌────────────────┼─────────────────┐
+       │                                  │
+       ▼                                  ▼
+ CREATE PAIRING                      MANAGE DEVICES
+       │
+       ▼
+┌───────────────────────────────────────────────┐
+│              PAIRING SERVICE                  │
+│                                               │
+│ CREATED → REQUESTED → PENDING → APPROVED      │
+│                         │                     │
+│                         ▼                     │
+│                     ENROLLED                  │
+│                         │                     │
+│                         ▼                     │
+│                      CONSUMED                 │
+└───────────────────────────────────────────────┘
+```
+
+### State Machine Lifecycle Transitions
+1. **User Authentication & Session Establishment**:
+   - Owner authenticates via Argon2id (`POST /api/v1/auth/login`).
+   - Server registers an active record in `user_sessions` with rotating refresh token hashes and returns a scoped Access Token (`Role: OWNER`).
+2. **Branch A: Pairing Service Execution**:
+   - `CREATED`: Dashboard calls `POST /api/v1/pairing/sessions`. Cloud generates a 5-minute session with high-entropy code `FG-XXXXXX` (stored server-side as SHA-256 hash `code_hash`).
+   - `REQUESTED`: Client device generates Ed25519 keypair and submits public key with device metadata via `POST /api/v1/pairing/sessions/:id/request`.
+   - `PENDING` (`PENDING_APPROVAL`): Cloud updates session status and dispatches `PAIRING_REQUEST_RECEIVED` WebSocket event to the Dashboard with device metadata for owner review.
+   - `APPROVED`: Owner explicitly clicks "Approve & Enroll" calling `POST /api/v1/pairing/sessions/:id/approve`.
+   - `ENROLLED`: Atomic database transaction commits device insertion into `devices`, stores `device_public_identities`, issues `device_credentials` ($v_1$), initializes `sync_cursors`, and writes audit log `DEVICE_ENROLLED`.
+   - `CONSUMED`: Client polls `GET /api/v1/pairing/sessions/:id/status`, receives persistent `deviceToken`, and saves it to local `SecureCredentialStore`. The session is permanently marked `CONSUMED` (HTTP 410 on subsequent requests).
+3. **Branch B: Fleet Device Management**:
+   - `GET /api/v1/devices`: Live registry of enrolled devices with computed status (`ACTIVE`, `OFFLINE`, `REVOKED`), app version, policy version, and protection status.
+   - `POST /api/v1/devices/:id/revoke`: Immediate revocation of device credentials with automatic WebSocket socket severance.
+
+## 3. Core Security Invariants
 - **No Permanent Pairing Codes**: Pairing codes are strictly short-lived (5 minutes default) and single-use.
 - **Server-Side Hash Storage**: Plaintext pairing codes are never persisted; only their SHA-256 hash (`code_hash`) is stored in the database.
 - **Client-Side Key Generation**: Clients generate asymmetric keypairs (Ed25519) on-device. The private key NEVER leaves the client.
@@ -11,7 +56,8 @@ The FocusGuard Pairing Protocol establishes a cryptographic trust relationship b
 - **Atomic Finalization**: Approval creates device records, links public identity, provisions persistent credentials, marks the session `APPROVED`, logs audit events, and broadcasts over WebSocket in an atomic database transaction.
 - **Session Single-Use & Expiry**: Once consumed, subsequent attempts to reuse the session ID or code return HTTP 410 Gone.
 
-## 3. Pairing Flow Sequence
+## 4. Pairing Flow Sequence
+
 
 ```
 Device (Client)                 FocusGuard Cloud                Owner Dashboard
