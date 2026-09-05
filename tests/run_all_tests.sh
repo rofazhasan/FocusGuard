@@ -44,6 +44,9 @@ echo -e "\n[7/$TOTAL_SUITES] Running Go Cloud Backend Package Tests..."
 PASSED_SUITES=$((PASSED_SUITES + 1))
 
 echo -e "\n[8/$TOTAL_SUITES] Running Phase 2 Device Pairing & Persistent Credential E2E..."
+if [ ! -f "backend/bin/server" ]; then
+  (cd backend && go build -o bin/server cmd/server/main.go)
+fi
 node tests/e2e/pairing_e2e_test.js
 PASSED_SUITES=$((PASSED_SUITES + 1))
 
