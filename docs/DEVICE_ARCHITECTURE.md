@@ -172,7 +172,76 @@ sequenceDiagram
 
 ---
 
-## 5. Token Architecture & Separation of Concerns
+## 5. Canonical 4-Step Client Enrollment & Reconnection Blueprint
+
+This 4-step flow is the foundational trust protocol for **all future FocusGuard native clients** (Windows Agent, macOS Agent, Android Application, and Browser Extensions):
+
+```
+Step 1 — Owner creates pairing session
+Dashboard
+    │
+    │ POST /pairing/sessions
+    ▼
+Server
+    │
+    ├── opaque session ID
+    ├── short-lived code (FG-XXXXXX, 5m TTL)
+    ├── expiry
+    └── status = CREATED
+
+Step 2 — New device requests pairing
+New Device
+    │
+    │ scans QR / enters code
+    ▼
+Pairing API (POST /pairing/sessions/:id/request)
+    │
+    ▼
+status = PENDING_APPROVAL
+(The device generates its own local asymmetric Ed25519 identity material during enrollment)
+
+Step 3 — Explicit approval
+Owner Dashboard
+       │
+       │ APPROVE (POST /pairing/sessions/:id/approve)
+       ▼
+Server Transaction (Atomic)
+       │
+       ├── Validate expiry
+       ├── Validate state == PENDING_APPROVAL
+       ├── Create Device row (status: ACTIVE)
+       ├── Associate credential metadata
+       ├── Store public identity (Ed25519)
+       ├── Initialize sync cursor (v1)
+       ├── Write Audit Log (DEVICE_ENROLLED)
+       └── Consume pairing session
+
+Step 4 — Future reconnection
+After restart / reboot:
+
+Device Starts
+      │
+      ▼
+Load Secure Local Credential
+      │
+      ▼
+Authenticate (Bearer deviceToken)
+      │
+      ▼
+ACTIVE
+(Zero QR. Zero code. No pairing again.)
+```
+
+### Client Platform Storage Bindings
+- **Windows Agent (C# / WPF)**: Uses Windows Credential Manager / DPAPI (`CryptProtectData`) to store `deviceId`, `deviceToken`, and private key securely under the Windows user profile.
+- **macOS Agent (Swift / Screen Time)**: Uses macOS Keychain Services (`kSecClassGenericPassword`, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`).
+- **Android Application (Kotlin / VpnService)**: Uses Android Keystore System with `EncryptedSharedPreferences` backed by AES-256-GCM master key.
+- **Browser Extension (Chrome, Brave, Edge, Firefox)**: Uses `chrome.storage.local` isolated to the extension's sandboxed background service worker.
+
+---
+
+## 6. Token Architecture & Separation of Concerns
+
 
 FocusGuard strictly partitions token lifecycles:
 
