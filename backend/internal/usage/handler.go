@@ -3,6 +3,7 @@ package usage
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -40,6 +41,31 @@ func (h *Handler) SyncUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Idempotency Resolution
+	idempotencyKey := req.IdempotencyKey
+	if idempotencyKey == "" {
+		idempotencyKey = r.Header.Get("X-Idempotency-Key")
+		if idempotencyKey == "" {
+			idempotencyKey = r.Header.Get("Idempotency-Key")
+		}
+	}
+	if idempotencyKey == "" && req.SyncSequence > 0 && req.DeviceID != uuid.Nil {
+		idempotencyKey = fmt.Sprintf("devseq:%s:%d", req.DeviceID.String(), req.SyncSequence)
+	}
+
+	// Check if idempotency response is cached
+	if idempotencyKey != "" && h.db != nil {
+		var cachedResponse string
+		err := h.db.QueryRowContext(r.Context(), "SELECT response_json FROM sync_idempotency_records WHERE idempotency_key = $1", idempotencyKey).Scan(&cachedResponse)
+		if err == nil && cachedResponse != "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Idempotency-Hit", "true")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(cachedResponse))
+			return
+		}
+	}
+
 	todayStr := time.Now().UTC().Format("2006-01-02")
 	aggregatedTotals := make(map[string]int)
 	limitsReached := []LimitReachedDto{}
@@ -52,7 +78,7 @@ func (h *Handler) SyncUsage(w http.ResponseWriter, r *http.Request) {
 		}
 		defer tx.Rollback()
 
-		// Upsert daily usage aggregates from deltas
+		// Upsert daily usage aggregates from deltas with deduplication
 		for _, delta := range req.UsageDeltas {
 			if delta.DurationSeconds <= 0 || delta.TargetValue == "" {
 				continue
@@ -62,13 +88,28 @@ func (h *Handler) SyncUsage(w http.ResponseWriter, r *http.Request) {
 				dateVal = todayStr
 			}
 
+			deltaID := delta.ID
+			if deltaID == "" {
+				deltaID = fmt.Sprintf("delta:%s:%s:%s:%d:%d", req.DeviceID.String(), delta.TargetValue, dateVal, delta.DurationSeconds, req.SyncSequence)
+			}
+
+			// Atomic deduplication check
+			insertDeltaQ := `INSERT INTO processed_usage_deltas (id, device_id, target_value, date, duration_seconds)
+			                 VALUES ($1, $2, $3, $4, $5)`
+			_, err = tx.ExecContext(r.Context(), insertDeltaQ, deltaID, req.DeviceID.String(), delta.TargetValue, dateVal, delta.DurationSeconds)
+			if err != nil {
+				// Already processed delta! Skip adding to avoid duplicate accumulation
+				logger.Info("Skipping already processed usage delta", "deltaID", deltaID)
+				continue
+			}
+
 			upsertQ := `INSERT INTO usage_aggregates (id, user_id, device_id, target_value, date, total_duration_seconds, updated_at)
 			            VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
 			            ON CONFLICT (user_id, device_id, target_value, date)
 			            DO UPDATE SET total_duration_seconds = usage_aggregates.total_duration_seconds + EXCLUDED.total_duration_seconds,
 			                           updated_at = CURRENT_TIMESTAMP`
 			recordID := uuid.New().String()
-			_, err := tx.ExecContext(r.Context(), upsertQ, recordID, claims.UserID.String(), req.DeviceID.String(), delta.TargetValue, dateVal, delta.DurationSeconds)
+			_, err = tx.ExecContext(r.Context(), upsertQ, recordID, claims.UserID.String(), req.DeviceID.String(), delta.TargetValue, dateVal, delta.DurationSeconds)
 			if err != nil {
 				logger.Error("Failed to upsert usage delta", "error", err)
 			}
@@ -139,7 +180,14 @@ func (h *Handler) SyncUsage(w http.ResponseWriter, r *http.Request) {
 		LimitsReached:   limitsReached,
 	}
 
+	respBytes, _ := json.Marshal(resp)
+	if idempotencyKey != "" && h.db != nil {
+		_, _ = h.db.ExecContext(r.Context(),
+			"INSERT INTO sync_idempotency_records (idempotency_key, device_id, response_json) VALUES ($1, $2, $3) ON CONFLICT (idempotency_key) DO NOTHING",
+			idempotencyKey, req.DeviceID.String(), string(respBytes))
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	_, _ = w.Write(respBytes)
 }

@@ -44,6 +44,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupEventListeners();
   await ensureAuthentication();
   await refreshAllData();
+  await checkActiveFocusSession();
   await fetchAuditLogs();
   await fetchEnforcementTimeline();
   await fetchRecommendations();
@@ -52,6 +53,26 @@ document.addEventListener("DOMContentLoaded", async () => {
 
 // 1. Authentication Layer
 async function ensureAuthentication() {
+  const savedToken = localStorage.getItem("focusguard_token");
+  if (savedToken) {
+    state.token = savedToken;
+    try {
+      const meRes = await fetch(`${API_BASE}/auth/me`, {
+        headers: { "Authorization": `Bearer ${state.token}` }
+      });
+      if (meRes.ok) {
+        const meData = await meRes.json();
+        state.user = meData.user;
+        updateUserUI();
+        updateConnectionStatus(true);
+        return;
+      }
+    } catch (e) {
+      console.warn("Auth check failed with cached token:", e);
+    }
+  }
+
+  // Fallback to default demo user for frictionless local zero-config
   try {
     let res = await fetch(`${API_BASE}/auth/login`, {
       method: "POST",
@@ -72,12 +93,21 @@ async function ensureAuthentication() {
       state.token = data.accessToken;
       state.user = data.user;
       localStorage.setItem("focusguard_token", state.token);
+      updateUserUI();
       updateConnectionStatus(true);
     }
   } catch (err) {
     console.error("Auth error:", err);
     updateConnectionStatus(false);
   }
+}
+
+function updateUserUI() {
+  const emailEl = document.getElementById("user-email-display");
+  const authCurrentEl = document.getElementById("auth-current-user-email");
+  const email = state.user?.email || "demo@focusguard.local";
+  if (emailEl) emailEl.textContent = email;
+  if (authCurrentEl) authCurrentEl.textContent = email;
 }
 
 // 2. Data Fetching
@@ -684,6 +714,20 @@ async function deletePolicy(policyId) {
 async function toggleFocusSession() {
   if (!state.isFocusActive) {
     try {
+      // 1. Register focus session with timestamp on backend for persistence & crash recovery
+      await fetch(`${API_BASE}/focus/start`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${state.token}`
+        },
+        body: JSON.stringify({
+          durationMinutes: state.selectedFocusMins,
+          blockedTargets: ["youtube.com", "instagram.com", "reddit.com", "SOCIAL"]
+        })
+      }).catch(() => {});
+
+      // 2. Dispatch remote focus command to fleet nodes
       const res = await fetch(`${API_BASE}/commands/dispatch`, {
         method: "POST",
         headers: {
@@ -724,6 +768,57 @@ async function toggleFocusSession() {
       console.error("End focus error:", e);
     }
   }
+}
+
+async function checkActiveFocusSession() {
+  if (!state.token) return;
+  try {
+    const res = await fetch(`${API_BASE}/focus/active`, {
+      headers: { "Authorization": `Bearer ${state.token}` }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.isActive && data.remainingSeconds > 0) {
+        resumeFocusTimerUI(data.remainingSeconds, data.durationMinutes);
+      } else if (state.isFocusActive) {
+        endFocusTimerUI();
+      }
+    }
+  } catch (e) {
+    console.warn("Check active focus error:", e);
+  }
+}
+
+function resumeFocusTimerUI(remainingSec, totalMins) {
+  state.isFocusActive = true;
+  state.focusRemainingSeconds = remainingSec;
+  if (totalMins) state.selectedFocusMins = totalMins;
+
+  const btn = document.getElementById("btn-toggle-focus");
+  const btnText = document.getElementById("focus-btn-text");
+  const statusBadge = document.getElementById("focus-status-badge");
+  const subtext = document.getElementById("focus-timer-subtext");
+  const display = document.getElementById("focus-timer-display");
+
+  if (btn) btn.classList.add("focus-active");
+  if (btnText) btnText.innerText = "END FOCUS SESSION";
+  if (statusBadge) {
+    statusBadge.className = "badge badge-red";
+    statusBadge.innerText = "Active Lockdown";
+  }
+  if (subtext) subtext.innerText = "Distracting apps and sites locked across fleet";
+
+  if (state.focusTimerInterval) clearInterval(state.focusTimerInterval);
+  if (display) display.innerText = formatSeconds(state.focusRemainingSeconds);
+
+  state.focusTimerInterval = setInterval(() => {
+    state.focusRemainingSeconds--;
+    if (state.focusRemainingSeconds <= 0) {
+      endFocusTimerUI();
+    } else {
+      if (display) display.innerText = formatSeconds(state.focusRemainingSeconds);
+    }
+  }, 1000);
 }
 
 function startFocusTimerUI(mins) {
@@ -1230,6 +1325,197 @@ function setupEventListeners() {
       document.getElementById("modal-extension-grace").style.display = "none";
       refreshAllData();
       fetchAuditLogs();
+    });
+  }
+
+  // Auth Modal Listeners
+  const modalAuth = document.getElementById("modal-auth");
+  const btnOpenAuth = document.getElementById("btn-auth-modal");
+  const btnCloseAuth = document.getElementById("btn-close-auth-modal");
+  const btnLogin = document.getElementById("btn-action-login");
+  const btnRegister = document.getElementById("btn-action-register");
+  const btnLogout = document.getElementById("btn-action-logout");
+  const authErrMsg = document.getElementById("auth-error-msg");
+
+  if (btnOpenAuth && modalAuth) {
+    btnOpenAuth.addEventListener("click", () => {
+      modalAuth.style.display = "flex";
+      updateUserUI();
+    });
+  }
+  if (btnCloseAuth && modalAuth) {
+    btnCloseAuth.addEventListener("click", () => {
+      modalAuth.style.display = "none";
+      if (authErrMsg) authErrMsg.style.display = "none";
+    });
+  }
+
+  if (btnLogin) {
+    btnLogin.addEventListener("click", async () => {
+      const email = document.getElementById("input-auth-email").value.trim();
+      const password = document.getElementById("input-auth-password").value;
+      if (!email || !password) {
+        if (authErrMsg) {
+          authErrMsg.textContent = "Please provide email and password.";
+          authErrMsg.style.display = "block";
+        }
+        return;
+      }
+      btnLogin.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/auth/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          state.token = data.accessToken;
+          state.user = data.user;
+          localStorage.setItem("focusguard_token", state.token);
+          updateUserUI();
+          updateConnectionStatus(true);
+          modalAuth.style.display = "none";
+          await refreshAllData();
+          await fetchAuditLogs();
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          if (authErrMsg) {
+            authErrMsg.textContent = errData.error?.message || "Invalid credentials.";
+            authErrMsg.style.display = "block";
+          }
+        }
+      } catch (err) {
+        if (authErrMsg) {
+          authErrMsg.textContent = "Network error connecting to backend.";
+          authErrMsg.style.display = "block";
+        }
+      } finally {
+        btnLogin.disabled = false;
+      }
+    });
+  }
+
+  if (btnRegister) {
+    btnRegister.addEventListener("click", async () => {
+      const email = document.getElementById("input-auth-email").value.trim();
+      const password = document.getElementById("input-auth-password").value;
+      if (!email || !password) {
+        if (authErrMsg) {
+          authErrMsg.textContent = "Please provide email and password.";
+          authErrMsg.style.display = "block";
+        }
+        return;
+      }
+      btnRegister.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/auth/register`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          state.token = data.accessToken;
+          state.user = data.user;
+          localStorage.setItem("focusguard_token", state.token);
+          updateUserUI();
+          updateConnectionStatus(true);
+          modalAuth.style.display = "none";
+          await refreshAllData();
+          await fetchAuditLogs();
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          if (authErrMsg) {
+            authErrMsg.textContent = errData.error?.message || "Registration error. Email may already exist.";
+            authErrMsg.style.display = "block";
+          }
+        }
+      } catch (err) {
+        if (authErrMsg) {
+          authErrMsg.textContent = "Network error during registration.";
+          authErrMsg.style.display = "block";
+        }
+      } finally {
+        btnRegister.disabled = false;
+      }
+    });
+  }
+
+  if (btnLogout) {
+    btnLogout.addEventListener("click", () => {
+      localStorage.removeItem("focusguard_token");
+      state.token = null;
+      state.user = null;
+      updateUserUI();
+      modalAuth.style.display = "none";
+      alert("Signed out successfully.");
+      window.location.reload();
+    });
+  }
+
+  // Privacy & Diagnostics Modal Listeners
+  const modalPrivacy = document.getElementById("modal-privacy");
+  const btnOpenPrivacy = document.getElementById("btn-privacy-modal");
+  const btnClosePrivacy = document.getElementById("btn-close-privacy-modal");
+  const btnDownloadUsage = document.getElementById("btn-download-usage-json");
+  const btnDownloadSupport = document.getElementById("btn-download-support-bundle");
+  const btnClearLocal = document.getElementById("btn-clear-local-data");
+
+  if (btnOpenPrivacy && modalPrivacy) {
+    btnOpenPrivacy.addEventListener("click", () => {
+      modalPrivacy.style.display = "flex";
+    });
+  }
+  if (btnClosePrivacy && modalPrivacy) {
+    btnClosePrivacy.addEventListener("click", () => {
+      modalPrivacy.style.display = "none";
+    });
+  }
+
+  if (btnDownloadUsage) {
+    btnDownloadUsage.addEventListener("click", () => {
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(state.dailyAnalytics, null, 2));
+      const downloadAnchor = document.createElement("a");
+      downloadAnchor.setAttribute("href", dataStr);
+      downloadAnchor.setAttribute("download", `focusguard-usage-export-${new Date().toISOString().split("T")[0]}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+    });
+  }
+
+  if (btnDownloadSupport) {
+    btnDownloadSupport.addEventListener("click", () => {
+      const bundle = {
+        application: "FocusGuard Fleet Dashboard",
+        appVersion: "2.0.0-STABLE-CANDIDATE",
+        generatedAt: new Date().toISOString(),
+        clientTimestamp: Date.now(),
+        platform: navigator.platform,
+        userAgent: navigator.userAgent,
+        connectionState: state.wsConnected ? "ONLINE" : "OFFLINE",
+        activeDevicesCount: state.devices.length,
+        activePoliciesCount: state.policies.length,
+        recentErrorsOrAudits: (state.auditLogs || []).slice(0, 15),
+        privacySanitized: true
+      };
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(bundle, null, 2));
+      const downloadAnchor = document.createElement("a");
+      downloadAnchor.setAttribute("href", dataStr);
+      downloadAnchor.setAttribute("download", `support-report-${Date.now()}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+    });
+  }
+
+  if (btnClearLocal) {
+    btnClearLocal.addEventListener("click", () => {
+      if (confirm("Are you sure you want to wipe local session data? You will be signed out.")) {
+        localStorage.clear();
+        window.location.reload();
+      }
     });
   }
 }

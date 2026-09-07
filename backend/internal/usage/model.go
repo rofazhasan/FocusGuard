@@ -16,16 +16,18 @@ type UsageSession struct {
 }
 
 type UsageDelta struct {
+	ID              string `json:"id,omitempty"` // Unique idempotency ID for this delta
 	TargetValue     string `json:"targetValue"`
 	DurationSeconds int    `json:"durationSeconds"`
 	Date            string `json:"date"` // YYYY-MM-DD
 }
 
 type UsageSyncRequest struct {
-	DeviceID      uuid.UUID    `json:"deviceId"`
-	SyncSequence  int64        `json:"syncSequence"`
-	UsageDeltas   []UsageDelta `json:"usageDeltas"`
-	ClientVersion string       `json:"clientVersion"`
+	DeviceID       uuid.UUID    `json:"deviceId"`
+	SyncSequence   int64        `json:"syncSequence"`
+	UsageDeltas    []UsageDelta `json:"usageDeltas"`
+	ClientVersion  string       `json:"clientVersion"`
+	IdempotencyKey string       `json:"idempotencyKey,omitempty"`
 }
 
 type UsageSyncResponse struct {

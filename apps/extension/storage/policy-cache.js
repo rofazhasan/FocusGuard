@@ -99,11 +99,27 @@ class PolicyCache {
     }
   }
 
-  async drainOfflineQueue() {
+  /**
+   * Safely drains acknowledged events from the offline queue.
+   * If acknowledgedEventIds is provided, only removes those matching IDs.
+   * If count is provided, removes the first `count` items.
+   * This guarantees zero event loss for events enqueued while an upload was in flight.
+   */
+  async drainOfflineQueue(acknowledgedEventIds = null, count = 0) {
     const current = await this.getStoredData();
-    const queue = current.offlineQueue || [];
+    let queue = current.offlineQueue || [];
+
+    if (Array.isArray(acknowledgedEventIds) && acknowledgedEventIds.length > 0) {
+      const ackSet = new Set(acknowledgedEventIds);
+      queue = queue.filter(evt => !ackSet.has(evt.id));
+    } else if (count > 0) {
+      queue = queue.slice(count);
+    } else {
+      queue = [];
+    }
+
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-      await chrome.storage.local.set({ [this.STORAGE_KEY_QUEUE]: [] });
+      await chrome.storage.local.set({ [this.STORAGE_KEY_QUEUE]: queue });
     }
     return queue;
   }

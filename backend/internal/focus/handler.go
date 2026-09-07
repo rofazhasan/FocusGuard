@@ -125,6 +125,58 @@ func (h *Handler) EndFocus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) GetActiveFocus(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.GetUserClaims(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	if h.db == nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"isActive": false})
+		return
+	}
+
+	q := `SELECT id, duration_minutes, started_at, ended_at FROM focus_sessions
+	      WHERE user_id = $1 AND is_completed = 0
+	      ORDER BY started_at DESC LIMIT 1`
+	var id string
+	var durationMins int
+	var startedAt time.Time
+	var endsAt time.Time
+
+	err := h.db.QueryRowContext(r.Context(), q, claims.UserID.String()).Scan(&id, &durationMins, &startedAt, &endsAt)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"isActive": false})
+		return
+	}
+
+	now := time.Now().UTC()
+	remainingSeconds := int(endsAt.Sub(now).Seconds())
+
+	if remainingSeconds <= 0 {
+		_, _ = h.db.ExecContext(r.Context(), "UPDATE focus_sessions SET is_completed = 1 WHERE id = $1", id)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"isActive": false, "status": "EXPIRED"})
+		return
+	}
+
+	resp := FocusSessionResponse{
+		ID:               id,
+		DurationMinutes:  durationMins,
+		RemainingSeconds: remainingSeconds,
+		IsActive:         true,
+		StartedAt:        startedAt,
+		EndsAt:           endsAt,
+		BlockedTargets:   []string{"SOCIAL", "ENTERTAINMENT"},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
 type FocusPreset struct {
 	ID              string   `json:"id"`
 	Name            string   `json:"name"`

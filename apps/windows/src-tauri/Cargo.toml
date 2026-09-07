@@ -1,0 +1,38 @@
+[package]
+name = "focusguard-windows"
+version = "0.3.0"
+description = "FocusGuard Windows Native Client"
+authors = ["FocusGuard Engineering Team"]
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rusqlite = { version = "0.31", features = ["bundled"] }
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+tokio = { version = "1.38", features = ["full"] }
+tokio-tungstenite = { version = "0.23", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.8", features = ["v4", "serde"] }
+sha2 = "0.10"
+aes-gcm = "0.10"
+log = "0.4"
+env_logger = "0.11"
+
+# Windows-specific system bindings
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+    "Win32_System_ProcessStatus",
+    "Win32_Security_Cryptography",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_SystemInformation",
+] }
+
+[dev-dependencies]
+tempfile = "3.10"

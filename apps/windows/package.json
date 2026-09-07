@@ -1,0 +1,19 @@
+{
+  "name": "focusguard-windows-client",
+  "version": "0.3.0",
+  "description": "FocusGuard Windows Native Client Tauri Frontend",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^1.6.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "vite": "^5.2.11"
+  }
+}

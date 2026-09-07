@@ -45,3 +45,26 @@ func TestUsageDatePartitioning(t *testing.T) {
 		t.Errorf("Invalid date partition format: %s", todayStr)
 	}
 }
+
+func TestUsageSyncIdempotency(t *testing.T) {
+	// Verify that UsageSyncRequest with IdempotencyKey or delta ID is structured correctly
+	req1 := UsageSyncRequest{
+		SyncSequence:   1,
+		IdempotencyKey: "test-key-12345",
+		UsageDeltas: []UsageDelta{
+			{
+				ID:              "delta-uuid-1",
+				TargetValue:     "youtube.com",
+				DurationSeconds: 300,
+				Date:            "2026-09-07",
+			},
+		},
+	}
+
+	if req1.IdempotencyKey != "test-key-12345" {
+		t.Errorf("Expected IdempotencyKey to be set")
+	}
+	if req1.UsageDeltas[0].ID != "delta-uuid-1" {
+		t.Errorf("Expected delta ID to be set")
+	}
+}

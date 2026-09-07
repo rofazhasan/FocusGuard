@@ -1,5 +1,7 @@
 # Build Artifacts & Distribution
 dist/
+target/
+**/target/
 .pids/
 *.zip
 
@@ -48,3 +50,4 @@ local.properties
 *.db-shm
 tests/e2e/*.json
 tests/e2e/*.db*
+.build/

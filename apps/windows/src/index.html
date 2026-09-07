@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FocusGuard — Windows Client</title>
+  <link rel="stylesheet" href="./styles/app.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            <path d="m9 12 2 2 4-4"/>
+          </svg>
+        </div>
+        <div class="brand-info">
+          <span class="brand-title">FocusGuard</span>
+          <span class="brand-badge">WINDOWS</span>
+        </div>
+      </div>
+
+      <nav class="nav-menu">
+        <button class="nav-item active" data-tab="dashboard">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
+          <span>Dashboard</span>
+        </button>
+        <button class="nav-item" data-tab="applications">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
+          <span>Applications</span>
+        </button>
+        <button class="nav-item" data-tab="policies">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2H2v10l9.29 9.29c.94.94 2.48.94 3.42 0l6.58-6.58c.94-.94.94-2.48 0-3.42L12 2Z"/><path d="M7 7h.01"/></svg>
+          <span>Policies</span>
+        </button>
+        <button class="nav-item" data-tab="usage">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" x2="12" y1="20" y2="10"/><line x1="18" x2="18" y1="20" y2="4"/><line x1="6" x2="6" y1="20" y2="16"/></svg>
+          <span>Usage</span>
+        </button>
+        <button class="nav-item" data-tab="settings">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span>Settings</span>
+        </button>
+        <button class="nav-item" data-tab="diagnostics">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg>
+          <span>Diagnostics</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="device-status-badge active" id="sidebar-device-status">
+          <span class="status-dot"></span>
+          <span class="status-text">DEVICE ACTIVE</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="content-container">
+      <header class="top-bar">
+        <div class="page-title-group">
+          <h1 id="page-title">Dashboard</h1>
+          <p id="page-subtitle">Real-time Windows process focus and attention telemetry</p>
+        </div>
+        <div class="top-actions">
+          <button class="btn btn-secondary" id="btn-sync-now">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+            <span>Sync Cloud</span>
+          </button>
+        </div>
+      </header>
+
+      <section class="tab-content" id="tab-dashboard">
+        <!-- Metric Cards -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-label">FOCUS HEALTH SCORE</span>
+              <span class="badge badge-success">OPTIMAL</span>
+            </div>
+            <div class="metric-value" id="metric-focus-score">88<span class="metric-unit">/100</span></div>
+            <p class="metric-subtext">Based on application switching latency</p>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-label">ACTIVE APPLICATION</span>
+              <span class="badge badge-info" id="badge-active-state">TRACKING</span>
+            </div>
+            <div class="metric-value font-mono" id="metric-active-app">discord.exe</div>
+            <p class="metric-subtext">PID: 4028 — Foreground window</p>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-label">TODAY'S USAGE</span>
+              <span class="metric-hint">Checkpointed</span>
+            </div>
+            <div class="metric-value" id="metric-today-time">14m 20s</div>
+            <p class="metric-subtext">1 enforced policy active</p>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <span class="metric-label">CLOUD SYNC STATE</span>
+              <span class="badge badge-success" id="badge-sync-state">HEALTHY</span>
+            </div>
+            <div class="metric-value" id="metric-pending-events">0 <span class="metric-unit">queued</span></div>
+            <p class="metric-subtext">Sync sequence: #42</p>
+          </div>
+        </div>
+
+        <!-- Real-time Active Target Bar -->
+        <div class="panel target-panel">
+          <div class="panel-header">
+            <h3>Active Application Time Budget</h3>
+            <span class="text-secondary font-mono" id="active-budget-text">14m 20s / 30m 00s (47%)</span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" id="active-budget-fill" style="width: 47%;"></div>
+          </div>
+        </div>
+
+        <!-- Top Tracked Apps Table -->
+        <div class="panel">
+          <div class="panel-header">
+            <h3>Top Tracked Processes Today</h3>
+          </div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Process Executable</th>
+                <th>Tracked Duration</th>
+                <th>Enforcement Policy</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="top-apps-tbody">
+              <tr>
+                <td class="font-mono">discord.exe</td>
+                <td>14m 20s</td>
+                <td>Daily 30m limit</td>
+                <td><span class="badge badge-success">ALLOWED</span></td>
+              </tr>
+              <tr>
+                <td class="font-mono">chrome.exe</td>
+                <td>42m 10s</td>
+                <td>Shared extension</td>
+                <td><span class="badge badge-info">TRACKING</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Applications Tab -->
+      <section class="tab-content hidden" id="tab-applications">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>Discovered Windows Applications</h3>
+            <p class="text-secondary">Toggle FocusGuard usage tracking for local executables</p>
+          </div>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Executable Name</th>
+                <th>Friendly Name</th>
+                <th>Tracking State</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="apps-tbody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Policies Tab -->
+      <section class="tab-content hidden" id="tab-policies">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>FocusGuard Application Policies</h3>
+            <p class="text-secondary">Configure daily time budgets, warning thresholds, and enforcement actions</p>
+          </div>
+          <div class="policy-form">
+            <div class="form-row">
+              <div class="form-group">
+                <label>Target Executable</label>
+                <input type="text" id="pol-target" class="form-input" placeholder="e.g. discord.exe" />
+              </div>
+              <div class="form-group">
+                <label>Policy Name</label>
+                <input type="text" id="pol-name" class="form-input" placeholder="e.g. Gaming Control" />
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Daily Limit (Minutes)</label>
+                <input type="number" id="pol-limit" class="form-input" value="30" min="1" max="1440" />
+              </div>
+              <div class="form-group">
+                <label>Warning Threshold (Minutes)</label>
+                <input type="number" id="pol-warn" class="form-input" value="25" min="1" max="1440" />
+              </div>
+              <div class="form-group">
+                <label>Enforcement Action</label>
+                <select id="pol-action" class="form-input">
+                  <option value="CLOSE_APPLICATION">CLOSE_APPLICATION</option>
+                  <option value="NOTIFY">NOTIFY</option>
+                  <option value="PAUSE_TRACKING">PAUSE_TRACKING</option>
+                </select>
+              </div>
+            </div>
+            <div class="policy-summary-preview" id="policy-preview-text">
+              Discord will warn you at 25 minutes and enforce your selected action at 30 minutes.
+            </div>
+            <button class="btn btn-primary" id="btn-save-policy">Save Policy</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Usage Tab -->
+      <section class="tab-content hidden" id="tab-usage">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>Today's Process Usage Breakdown</h3>
+          </div>
+          <div id="usage-list" class="usage-cards-container">
+            <!-- Populated via TypeScript -->
+          </div>
+        </div>
+      </section>
+
+      <!-- Settings Tab -->
+      <section class="tab-content hidden" id="tab-settings">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>System & Agent Configuration</h3>
+          </div>
+          <div class="settings-group">
+            <div class="setting-item">
+              <div>
+                <strong>Launch on Windows Startup</strong>
+                <p class="text-secondary">Runs FocusGuard automatically in the system tray when logging in.</p>
+              </div>
+              <input type="checkbox" checked id="setting-autostart" />
+            </div>
+            <div class="setting-item">
+              <div>
+                <strong>Idle Detection Threshold (Seconds)</strong>
+                <p class="text-secondary">Usage halts when user input has ceased for this duration.</p>
+              </div>
+              <input type="number" value="60" min="15" max="600" class="form-input-sm" id="setting-idle" />
+            </div>
+            <div class="setting-item">
+              <div>
+                <strong>Heartbeat Interval (Seconds)</strong>
+                <p class="text-secondary">Frequency of device health reports sent to FocusGuard Cloud.</p>
+              </div>
+              <input type="number" value="60" min="30" max="300" class="form-input-sm" id="setting-heartbeat" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Diagnostics Tab -->
+      <section class="tab-content hidden" id="tab-diagnostics">
+        <div class="panel">
+          <div class="panel-header">
+            <h3>System Diagnostics & Telemetry State</h3>
+          </div>
+          <div class="diag-grid">
+            <div class="diag-item">
+              <span class="diag-label">Client App Version:</span>
+              <span class="diag-value font-mono">0.3.0 (Production)</span>
+            </div>
+            <div class="diag-item">
+              <span class="diag-label">Target OS:</span>
+              <span class="diag-value font-mono">Microsoft Windows (x86_64)</span>
+            </div>
+            <div class="diag-item">
+              <span class="diag-label">Device Identity ID:</span>
+              <span class="diag-value font-mono" id="diag-device-id">e98abefa...a62f (Masked)</span>
+            </div>
+            <div class="diag-item">
+              <span class="diag-label">Policy Cache Version:</span>
+              <span class="diag-value font-mono" id="diag-policy-ver">v1 (Synchronized)</span>
+            </div>
+            <div class="diag-item">
+              <span class="diag-label">Offline Event Queue:</span>
+              <span class="diag-value font-mono" id="diag-queue-count">0 items pending</span>
+            </div>
+            <div class="diag-item">
+              <span class="diag-label">Database Health:</span>
+              <span class="diag-value font-mono text-success">SQLite WAL (Clean)</span>
+            </div>
+          </div>
+          <div style="margin-top: 1.5rem;">
+            <button class="btn btn-secondary" id="btn-export-diag">Export Sanitized Diagnostics (.json)</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

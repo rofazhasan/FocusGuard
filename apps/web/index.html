@@ -32,15 +32,12 @@
         <button class="mode-btn" id="btn-mode-managed">📱 Managed Device View</button>
       </div>
 
-      <div class="header-actions">
-        <div class="live-stream-badge" id="live-stream-indicator">
-          <span class="pulse-dot"></span>
-          <span id="live-active-target">Monitoring: Initializing...</span>
+        <div class="user-account-badge" id="user-account-badge" style="display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: #cbd5e1; background: rgba(255,255,255,0.05); padding: 5px 12px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.1);">
+          <span style="color: #10b981;">●</span>
+          <span id="user-email-display">demo@focusguard.local</span>
+          <button id="btn-auth-modal" style="background: none; border: none; color: #818cf8; cursor: pointer; font-size: 11px; text-decoration: underline; margin-left: 4px;">Account</button>
         </div>
-        <div class="status-badge status-protected" id="system-status">
-          <span class="status-dot"></span>
-          <span id="status-text">Fleet Protected</span>
-        </div>
+        <button class="btn btn-secondary" id="btn-privacy-modal" title="Privacy, Diagnostics & Data Export">🛡️ Privacy & Export</button>
         <button class="btn btn-secondary" id="btn-blocker-demo">Preview Shield</button>
       </div>
     </header>
@@ -638,6 +635,71 @@
           <button class="btn btn-secondary" id="btn-dismiss-grace" style="flex: 1;">
             I Have Enabled It
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal 5: Account Authentication Modal (Sign In / Register / Logout) -->
+    <div class="modal-overlay" id="modal-auth" style="display: none;">
+      <div class="modal-card" style="max-width: 440px;">
+        <div class="modal-header">
+          <h2 class="modal-title" id="auth-modal-title">Account Management</h2>
+          <button class="btn-close" id="btn-close-auth-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div id="auth-status-section" style="margin-bottom: 16px; padding: 12px; background: rgba(255,255,255,0.03); border-radius: 8px; border: 1px solid var(--border);">
+            <div style="font-size: 11px; color: var(--muted); text-transform: uppercase;">Active Session</div>
+            <div style="font-size: 14px; font-weight: 700; color: #fff; margin-top: 4px;" id="auth-current-user-email">demo@focusguard.local</div>
+            <button class="btn btn-secondary" id="btn-action-logout" style="margin-top: 10px; width: 100%; font-size: 12px; color: #f87171;">Sign Out of Current Account</button>
+          </div>
+
+          <div id="auth-form-section">
+            <div style="font-size: 13px; font-weight: 700; margin-bottom: 12px; color: #cbd5e1;">Sign In or Create Account</div>
+            <div class="form-group" style="margin-bottom: 12px;">
+              <label class="form-label" style="font-size: 11px;">Email Address</label>
+              <input type="email" id="input-auth-email" class="form-input" placeholder="user@example.com" style="width: 100%;">
+            </div>
+            <div class="form-group" style="margin-bottom: 16px;">
+              <label class="form-label" style="font-size: 11px;">Password</label>
+              <input type="password" id="input-auth-password" class="form-input" placeholder="••••••••" style="width: 100%;">
+            </div>
+            <div id="auth-error-msg" style="color: #f87171; font-size: 12px; margin-bottom: 12px; display: none;"></div>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-primary" id="btn-action-login" style="flex: 1;">Sign In</button>
+              <button class="btn btn-secondary" id="btn-action-register" style="flex: 1;">Create Account</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal 6: Privacy, Diagnostics & Data Export Modal -->
+    <div class="modal-overlay" id="modal-privacy" style="display: none;">
+      <div class="modal-card" style="max-width: 560px;">
+        <div class="modal-header">
+          <h2 class="modal-title">🛡️ Privacy, Diagnostics & Data Ownership</h2>
+          <button class="btn-close" id="btn-close-privacy-modal">&times;</button>
+        </div>
+        <div class="modal-body" style="font-size: 13px; color: #cbd5e1; line-height: 1.6;">
+          <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+            <div style="font-weight: 700; color: #34d399; margin-bottom: 4px;">Zero Surveillance Invariant</div>
+            FocusGuard is an attention protection tool, NOT a spy tracker. Only domain hostnames and active durations are tracked. Full URLs, queries, page contents, incognito mode, keystrokes, and personal data are <strong>strictly omitted</strong>.
+          </div>
+
+          <div style="margin-bottom: 16px;">
+            <div style="font-weight: 700; color: #fff; margin-bottom: 8px;">Data Ownership & Export</div>
+            <p style="font-size: 12px; color: var(--muted); margin-bottom: 10px;">Download your full usage history in open formats, or generate a sanitized support bundle to troubleshoot issues.</p>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-secondary" id="btn-download-usage-json" style="flex: 1;">📥 Export Usage (JSON)</button>
+              <button class="btn btn-secondary" id="btn-download-support-bundle" style="flex: 1;">📋 Support Report</button>
+            </div>
+          </div>
+
+          <div style="border-top: 1px solid var(--border); padding-top: 14px;">
+            <div style="font-weight: 700; color: #f87171; margin-bottom: 4px;">Danger Zone</div>
+            <p style="font-size: 12px; color: var(--muted); margin-bottom: 8px;">Wipe all stored local analytics and device credentials from this browser session.</p>
+            <button class="btn btn-secondary" id="btn-clear-local-data" style="color: #f87171; border-color: rgba(239, 68, 68, 0.3); font-size: 12px;">Wipe Local Session Data</button>
+          </div>
         </div>
       </div>
     </div>

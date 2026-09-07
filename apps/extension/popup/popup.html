@@ -26,6 +26,27 @@
       </div>
     </div>
 
+    <!-- Device Identity & Network Status -->
+    <div class="card device-card">
+      <div class="card-title-row">
+        <span class="card-title">Device Link</span>
+        <span class="net-badge net-online" id="net-badge">ONLINE</span>
+      </div>
+      <div class="device-status-row">
+        <span class="device-id-text" id="device-id-display">Device: ext_loading...</span>
+        <span class="pairing-badge paired" id="pairing-badge">PAIRED</span>
+      </div>
+      <!-- Unpaired code submission form -->
+      <div id="pairing-form" style="display: none; margin-top: 10px;">
+        <div style="font-size: 11px; color: var(--muted); margin-bottom: 6px;">Enter 6-character code from dashboard:</div>
+        <div style="display: flex; gap: 6px;">
+          <input type="text" id="input-pairing-code" placeholder="FG-XXXX" maxlength="8" style="flex: 1; padding: 6px 10px; background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 6px; color: #fff; font-family: monospace; font-size: 13px; text-transform: uppercase;">
+          <button id="btn-submit-pair" style="padding: 6px 12px; background: var(--primary); border: none; border-radius: 6px; color: #fff; font-size: 11px; font-weight: 700; cursor: pointer;">Pair</button>
+        </div>
+        <div id="pairing-msg" style="font-size: 10px; color: #38bdf8; margin-top: 4px; display: none;"></div>
+      </div>
+    </div>
+
     <!-- Active Tab Attention Monitor -->
     <div class="card monitor-card">
       <div class="card-title">Active Site Focus</div>
@@ -51,7 +72,7 @@
     </div>
 
     <div class="action-footer">
-      <button class="btn-link" id="btn-open-dashboard">Open Fleet Dashboard →</button>
+      <button class="btn-link" id="btn-open-dashboard">Open Fleet Dashboard (Port 3001) →</button>
     </div>
   </div>
 

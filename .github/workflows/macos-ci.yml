@@ -5,27 +5,36 @@ on:
     branches: [ main, develop ]
     paths:
       - 'apps/macos/**'
+      - '.github/workflows/macos-ci.yml'
   pull_request:
     branches: [ main, develop ]
     paths:
       - 'apps/macos/**'
+      - '.github/workflows/macos-ci.yml'
 
 jobs:
-  build-macos:
-    name: Build macOS Application
-    runs-on: macos-latest
+  build-and-test:
+    name: Build & Adversarial Verification (macOS)
+    runs-on: macos-14
 
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Select Xcode Version
-        run: sudo xcode-select -s /Applications/Xcode.app
+      - name: Show Swift Toolchain Version
+        run: swift --version
 
-      - name: Build macOS Target
+      - name: Build FocusGuard macOS Package
         run: |
-          if [ -d "apps/macos/FocusGuard.xcodeproj" ]; then
-            xcodebuild build -project apps/macos/FocusGuard.xcodeproj -scheme FocusGuard -destination 'platform=macOS' CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO
-          else
-            echo "Xcode project pending creation"
-          fi
+          cd apps/macos
+          swift build -c release
+
+      - name: Run FocusGuard Vertical Slice Verification
+        run: |
+          cd apps/macos
+          swift run FocusGuardVerificationRunner
+
+      - name: Run FocusGuard Adversarial Reliability Suite (21 Scenarios)
+        run: |
+          cd apps/macos
+          swift run FocusGuardAdversarialRunner

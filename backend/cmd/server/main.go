@@ -234,6 +234,7 @@ func main() {
 		// Focus Sessions
 		r.Post("/api/v1/focus/start", focusHandler.StartFocus)
 		r.Post("/api/v1/focus/end", focusHandler.EndFocus)
+		r.Get("/api/v1/focus/active", focusHandler.GetActiveFocus)
 		r.Get("/api/v1/focus/presets", focusHandler.GetFocusPresets)
 	})
 

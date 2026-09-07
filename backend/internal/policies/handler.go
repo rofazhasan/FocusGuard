@@ -336,7 +336,6 @@ func (h *Handler) SyncDevicePolicies(w http.ResponseWriter, r *http.Request) {
 		      FROM policies WHERE user_id = $1 AND is_enabled = 1 ORDER BY version DESC`
 		rows, err := h.db.QueryContext(r.Context(), q, userID.String())
 		if err == nil {
-			defer rows.Close()
 			for rows.Next() {
 				var idStr, uidStr, perStr, enfStr string
 				var isEnabledInt int
@@ -354,29 +353,30 @@ func (h *Handler) SyncDevicePolicies(w http.ResponseWriter, r *http.Request) {
 					if p.Version > maxVersion {
 						maxVersion = p.Version
 					}
-
-					// Fetch targets
-					tq := `SELECT id, policy_id, target_type, target_value FROM policy_targets WHERE policy_id = $1`
-					trows, terr := h.db.QueryContext(r.Context(), tq, p.ID.String())
-					if terr == nil {
-						p.Targets = []PolicyTarget{}
-						for trows.Next() {
-							var tidStr, tpidStr, ttypeStr, tval string
-							if err := trows.Scan(&tidStr, &tpidStr, &ttypeStr, &tval); err == nil {
-								tid, _ := uuid.Parse(tidStr)
-								tpid, _ := uuid.Parse(tpidStr)
-								p.Targets = append(p.Targets, PolicyTarget{
-									ID:          tid,
-									PolicyID:    tpid,
-									TargetType:  TargetType(ttypeStr),
-									TargetValue: tval,
-								})
-							}
-						}
-						trows.Close()
-					}
-
 					policiesList = append(policiesList, p)
+				}
+			}
+			rows.Close()
+
+			for i := range policiesList {
+				tq := `SELECT id, policy_id, target_type, target_value FROM policy_targets WHERE policy_id = $1`
+				trows, terr := h.db.QueryContext(r.Context(), tq, policiesList[i].ID.String())
+				if terr == nil {
+					policiesList[i].Targets = []PolicyTarget{}
+					for trows.Next() {
+						var tidStr, tpidStr, ttypeStr, tval string
+						if err := trows.Scan(&tidStr, &tpidStr, &ttypeStr, &tval); err == nil {
+							tid, _ := uuid.Parse(tidStr)
+							tpid, _ := uuid.Parse(tpidStr)
+							policiesList[i].Targets = append(policiesList[i].Targets, PolicyTarget{
+								ID:          tid,
+								PolicyID:    tpid,
+								TargetType:  TargetType(ttypeStr),
+								TargetValue: tval,
+							})
+						}
+					}
+					trows.Close()
 				}
 			}
 		}

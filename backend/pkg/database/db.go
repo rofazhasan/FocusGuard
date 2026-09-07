@@ -244,6 +244,22 @@ func initSQLiteSchema(db *sql.DB) error {
 		last_sync_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS processed_usage_deltas (
+		id TEXT PRIMARY KEY,
+		device_id TEXT NOT NULL,
+		target_value TEXT NOT NULL,
+		date TEXT NOT NULL,
+		duration_seconds INTEGER NOT NULL,
+		processed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS sync_idempotency_records (
+		idempotency_key TEXT PRIMARY KEY,
+		device_id TEXT NOT NULL,
+		response_json TEXT NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 	_, err := db.Exec(schema)
 	if err != nil {
@@ -438,6 +454,22 @@ func initPostgresSchema(db *sql.DB) error {
 		last_policy_version INT NOT NULL DEFAULT 0,
 		last_sync_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+
+	CREATE TABLE IF NOT EXISTS processed_usage_deltas (
+		id VARCHAR(255) PRIMARY KEY,
+		device_id VARCHAR(100) NOT NULL,
+		target_value VARCHAR(255) NOT NULL,
+		date VARCHAR(20) NOT NULL,
+		duration_seconds INT NOT NULL,
+		processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+
+	CREATE TABLE IF NOT EXISTS sync_idempotency_records (
+		idempotency_key VARCHAR(255) PRIMARY KEY,
+		device_id VARCHAR(100) NOT NULL,
+		response_json TEXT NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);
 	`
 	_, err := db.Exec(schema)

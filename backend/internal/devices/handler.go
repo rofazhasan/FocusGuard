@@ -148,13 +148,13 @@ func (h *Handler) ListDevices(w http.ResponseWriter, r *http.Request) {
 
 		now := time.Now().UTC()
 		for rows.Next() {
-			var idStr, userIDStr, platStr, clientStr, statStr, protStr string
+			var idStr, userIDStr, devNameStr, platStr, clientStr, statStr, protStr string
 			var appVer, osVer sql.NullString
 			var polVer int
 			var lastSeen, createdAt time.Time
 			var revokedAt sql.NullTime
 
-			if err := rows.Scan(&idStr, &userIDStr, &statStr, &platStr, &clientStr, &osVer, &appVer, &statStr, &protStr, &polVer, &lastSeen, &createdAt, &revokedAt); err != nil {
+			if err := rows.Scan(&idStr, &userIDStr, &devNameStr, &platStr, &clientStr, &osVer, &appVer, &statStr, &protStr, &polVer, &lastSeen, &createdAt, &revokedAt); err != nil {
 				// Fallback scan for backward-compatible column set
 				var d Device
 				var idFallback, uidFallback, platFallback, statusFallback string
@@ -171,7 +171,7 @@ func (h *Handler) ListDevices(w http.ResponseWriter, r *http.Request) {
 			}
 
 			d := Device{
-				DeviceName:      statStr, // scanned into name position
+				DeviceName:      devNameStr,
 				Platform:        PlatformType(platStr),
 				ClientType:      ClientType(clientStr),
 				OSVersion:       osVer.String,

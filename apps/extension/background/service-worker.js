@@ -22,22 +22,63 @@ const policyEngine = new ExtensionPolicyEngine(DomainMatcher);
 let wsConnection = null;
 let currentPolicyVersion = 1;
 let authToken = null;
+let cachedDeviceId = null;
+let currentNetworkState = 'OFFLINE'; // ONLINE | DEGRADED | OFFLINE | RECONNECTING | SYNCING
+let reconnectAttempts = 0;
+let reconnectTimeoutId = null;
+
+async function setNetworkState(newState) {
+  if (currentNetworkState === newState) return;
+  currentNetworkState = newState;
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    await chrome.storage.local.set({ fg_network_state: newState });
+  }
+}
 
 /**
- * Retrieves cached JWT token or authenticates with default primary user.
+ * Gets or dynamically generates a unique hardware/browser device identity.
+ */
+async function getOrCreateDeviceId() {
+  if (cachedDeviceId) return cachedDeviceId;
+
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    const data = await chrome.storage.local.get(['focusguard_device_id', 'focusguard_device_name', 'fg_pairing_status']);
+    if (data && data.focusguard_device_id) {
+      cachedDeviceId = data.focusguard_device_id;
+      return cachedDeviceId;
+    }
+
+    const newId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('ext_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9));
+    const devName = 'Browser Extension (' + (typeof navigator !== 'undefined' && navigator.userAgent.includes('Firefox') ? 'Firefox' : 'Chrome') + ')';
+    await chrome.storage.local.set({
+      focusguard_device_id: newId,
+      focusguard_device_name: devName,
+      fg_pairing_status: data.fg_pairing_status || 'UNPAIRED'
+    });
+    cachedDeviceId = newId;
+    return cachedDeviceId;
+  }
+
+  cachedDeviceId = '00000000-0000-0000-0000-000000000002';
+  return cachedDeviceId;
+}
+
+/**
+ * Retrieves cached JWT token from local storage, or attempts session authentication.
  */
 async function getOrFetchAuthToken() {
   if (authToken) return authToken;
 
   try {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-      const data = await chrome.storage.local.get('focusguard_token');
-      if (data && data.focusguard_token) {
-        authToken = data.focusguard_token;
+      const data = await chrome.storage.local.get(['focusguard_token', 'focusguard_device_token']);
+      if (data && (data.focusguard_token || data.focusguard_device_token)) {
+        authToken = data.focusguard_token || data.focusguard_device_token;
         return authToken;
       }
     }
 
+    // Default primary demo user for frictionless developer zero-config
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -62,8 +103,9 @@ async function getOrFetchAuthToken() {
 const sessionTracker = new SessionTracker({
   idleThresholdSeconds: 60,
   onUsageTick: async (tick) => {
-    // Increment today's usage in policy engine
-    policyEngine.updateUsage(tick.domain, tick.deltaSeconds);
+    // Guard against sleep jump: cap single tick delta to 60 seconds
+    const safeDelta = Math.min(tick.deltaSeconds, 60);
+    policyEngine.updateUsage(tick.domain, safeDelta);
     await policyCache.setTodayUsage(policyEngine.todayUsage);
 
     // Evaluate if this usage now triggers a block
@@ -80,7 +122,7 @@ const sessionTracker = new SessionTracker({
 /**
  * Redirects tab to the FocusGuard block page and emits an enforcement event.
  */
-function redirectToBlockPage(tabId, urlOrDomain, evalResult) {
+async function redirectToBlockPage(tabId, urlOrDomain, evalResult) {
   const normDomain = typeof DomainMatcher !== 'undefined' ? DomainMatcher.normalizeDomain(urlOrDomain) : urlOrDomain;
   const blockUrl = chrome.runtime.getURL(
     `pages/block.html?target=${encodeURIComponent(normDomain)}` +
@@ -91,11 +133,11 @@ function redirectToBlockPage(tabId, urlOrDomain, evalResult) {
     `&reset=${encodeURIComponent(evalResult.nextReset || '12:00 AM')}`
   );
 
-  // Enqueue enforcement event for offline resilience and sync
+  const devId = await getOrCreateDeviceId();
   const eventId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('evt_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9));
   const blockEvent = {
     id: eventId,
-    deviceId: '00000000-0000-0000-0000-000000000002',
+    deviceId: devId,
     eventType: 'DOMAIN_BLOCKED',
     domain: normDomain,
     reason: evalResult.reason || 'Attention budget reached',
@@ -107,7 +149,7 @@ function redirectToBlockPage(tabId, urlOrDomain, evalResult) {
     }
   };
 
-  policyCache.enqueueOfflineEvent(blockEvent).catch((err) => {
+  await policyCache.enqueueOfflineEvent(blockEvent).catch((err) => {
     console.warn('[FocusGuard Extension] Error enqueuing block event:', err);
   });
 
@@ -118,7 +160,7 @@ function redirectToBlockPage(tabId, urlOrDomain, evalResult) {
 }
 
 /**
- * Drains and synchronizes queued offline events to the backend with idempotency.
+ * Drains and synchronizes queued offline events to the backend with atomic deduplication.
  */
 async function flushOfflineEvents() {
   try {
@@ -129,20 +171,27 @@ async function flushOfflineEvents() {
     const token = await getOrFetchAuthToken();
     if (!token) return;
 
+    await setNetworkState('SYNCING');
+    const toFlush = queue.slice(0, 50);
+
     const res = await fetch(`${API_BASE}/events/batch`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({ events: queue })
+      body: JSON.stringify({ events: toFlush })
     });
 
     if (res.ok) {
-      await policyCache.drainOfflineQueue();
-      console.log(`[FocusGuard Extension] Flushed ${queue.length} offline events to cloud.`);
+      await policyCache.drainOfflineQueue(toFlush.map(e => e.id));
+      await setNetworkState('ONLINE');
+      console.log(`[FocusGuard Extension] Flushed ${toFlush.length} offline events to cloud.`);
+    } else {
+      await setNetworkState('DEGRADED');
     }
   } catch (e) {
+    await setNetworkState('OFFLINE');
     console.warn('[FocusGuard Extension] Flush offline events deferred (offline mode).');
   }
 }
@@ -221,15 +270,35 @@ let heartbeatInterval = null;
 
 function startHeartbeatLoop() {
   if (heartbeatInterval) clearInterval(heartbeatInterval);
-  heartbeatInterval = setInterval(() => {
+  heartbeatInterval = setInterval(async () => {
     if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+      const devId = await getOrCreateDeviceId();
       wsConnection.send(JSON.stringify({
         type: 'HEARTBEAT',
+        deviceId: devId,
         platform: 'WEB_EXTENSION',
         timestamp: Date.now()
       }));
     }
   }, 10000);
+}
+
+function scheduleReconnect() {
+  if (reconnectTimeoutId) clearTimeout(reconnectTimeoutId);
+  reconnectAttempts++;
+  // Jittered exponential backoff: 2s * 1.5^(attempt-1) up to 60s max, ±20% jitter
+  const baseDelay = Math.min(60000, 2000 * Math.pow(1.5, Math.min(reconnectAttempts - 1, 8)));
+  const jitter = baseDelay * (0.8 + Math.random() * 0.4);
+  const delayMs = Math.round(jitter);
+
+  setNetworkState('RECONNECTING');
+  reconnectTimeoutId = setTimeout(() => {
+    connectWebSocket();
+  }, delayMs);
+
+  if (typeof chrome !== 'undefined' && chrome.alarms) {
+    chrome.alarms.create('fg_reconnect_watchdog', { delayInMinutes: Math.max(0.5, delayMs / 60000) });
+  }
 }
 
 /**
@@ -245,20 +314,28 @@ async function connectWebSocket() {
     const wsUrl = token ? `${WS_URL}?token=${token}` : WS_URL;
     wsConnection = new WebSocket(wsUrl);
 
-    wsConnection.onopen = () => {
+    wsConnection.onopen = async () => {
       console.log('[FocusGuard Extension] Real-time WebSocket connected');
+      reconnectAttempts = 0;
+      await setNetworkState('ONLINE');
+      const devId = await getOrCreateDeviceId();
       wsConnection.send(JSON.stringify({
         type: 'REGISTER_DEVICE',
-        deviceId: 'extension-browser-node',
+        deviceId: devId,
         platform: 'WEB_EXTENSION'
       }));
       startHeartbeatLoop();
+      flushOfflineEvents();
     };
 
     wsConnection.onclose = () => {
-      console.log('[FocusGuard Extension] WS closed, reconnecting in 5s...');
+      console.log('[FocusGuard Extension] WS closed, scheduling reconnect...');
       if (heartbeatInterval) clearInterval(heartbeatInterval);
-      setTimeout(connectWebSocket, 5000);
+      scheduleReconnect();
+    };
+
+    wsConnection.onerror = (err) => {
+      console.warn('[FocusGuard Extension] WS error:', err);
     };
 
     wsConnection.onmessage = async (msg) => {
@@ -276,7 +353,6 @@ async function connectWebSocket() {
             allowedDomains: payload.allowedDomains || ['github.com', 'stackoverflow.com']
           });
           await policyCache.setFocusSession(policyEngine.focusSession);
-          // Check currently active tab
           if (sessionTracker.currentTabId && sessionTracker.currentDomain) {
             const evalResult = policyEngine.evaluate(sessionTracker.currentDomain);
             if (evalResult.action === 'BLOCK') {
@@ -298,17 +374,9 @@ async function connectWebSocket() {
         console.error('[FocusGuard Extension] Error handling WS message', e);
       }
     };
-
-    wsConnection.onclose = () => {
-      console.log('[FocusGuard Extension] WS closed, reconnecting in 5s...');
-      setTimeout(connectWebSocket, 5000);
-    };
-
-    wsConnection.onerror = (err) => {
-      console.warn('[FocusGuard Extension] WS error:', err);
-    };
   } catch (err) {
     console.warn('[FocusGuard Extension] WS initialization failed:', err);
+    scheduleReconnect();
   }
 }
 
@@ -365,12 +433,19 @@ if (chrome.idle) {
   });
 }
 
-// Periodic Alarm for Incremental Usage Synchronization
+// Periodic Alarm for Incremental Usage Synchronization & Reconnect Watchdog
 if (chrome.alarms) {
   chrome.alarms.onAlarm.addListener(async (alarm) => {
+    if (alarm.name === 'fg_reconnect_watchdog') {
+      if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) {
+        connectWebSocket();
+      }
+    }
+
     if (alarm.name === 'fg_usage_sync') {
       try {
         const token = await getOrFetchAuthToken();
+        const devId = await getOrCreateDeviceId();
         const cached = await policyCache.getStoredData();
         const todayUsage = cached.todayUsage || {};
         const lastSynced = cached.lastSyncedUsage || {};
@@ -384,6 +459,7 @@ if (chrome.alarms) {
           const delta = sec - prev;
           if (delta > 0) {
             usageDeltas.push({
+              id: `ext_delta_${devId}_${target}_${Date.now()}`,
               targetValue: target,
               durationSeconds: delta,
               date: todayStr
@@ -400,7 +476,8 @@ if (chrome.alarms) {
             method: 'POST',
             headers: headers,
             body: JSON.stringify({
-              deviceId: '00000000-0000-0000-0000-000000000002',
+              deviceId: devId,
+              idempotencyKey: `ext_batch_${devId}_${Date.now()}`,
               usageDeltas: usageDeltas
             })
           });
@@ -416,6 +493,100 @@ if (chrome.alarms) {
       } catch (err) {
         console.warn('[FocusGuard Extension] Periodic sync skipped (offline mode).');
       }
+    }
+  });
+}
+
+// ---------------- Runtime Message Interceptors (Popup / UI Bridge) ----------------
+
+if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.type === 'GET_STATUS') {
+      (async () => {
+        const devId = await getOrCreateDeviceId();
+        const cached = await policyCache.getStoredData();
+        const stored = await chrome.storage.local.get(['fg_pairing_status', 'focusguard_device_name', 'focusguard_token']);
+        sendResponse({
+          deviceId: devId,
+          deviceName: stored.focusguard_device_name || 'Browser Extension',
+          pairingStatus: stored.fg_pairing_status || (stored.focusguard_token ? 'PAIRED' : 'UNPAIRED'),
+          networkState: currentNetworkState,
+          policyVersion: currentPolicyVersion,
+          policiesCount: (cached.policies || []).length,
+          offlineQueueSize: (cached.offlineQueue || []).length,
+          focusSession: cached.focusSession
+        });
+      })();
+      return true; // Keep async channel open
+    }
+
+    if (request.type === 'SUBMIT_PAIRING_CODE') {
+      (async () => {
+        try {
+          const devId = await getOrCreateDeviceId();
+          const devName = 'Browser Extension (' + (navigator.userAgent.includes('Firefox') ? 'Firefox' : 'Chrome') + ')';
+          const code = (request.code || '').trim().toUpperCase();
+
+          const reqRes = await fetch(`${API_BASE}/pairing/request`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              pairingCode: code,
+              deviceName: devName,
+              platform: 'BROWSER_EXTENSION',
+              clientType: 'EXTENSION',
+              appVersion: '2.0.0',
+              publicKey: 'simulated_ext_pubkey_' + devId,
+              keyAlgorithm: 'Ed25519'
+            })
+          });
+
+          if (!reqRes.ok) {
+            const err = await reqRes.json().catch(() => ({}));
+            sendResponse({ success: false, error: err.error?.message || 'Invalid or expired pairing code' });
+            return;
+          }
+
+          const reqData = await reqRes.json();
+          const sessionId = reqData.sessionId;
+
+          let approved = false;
+          for (let i = 0; i < 30; i++) {
+            await new Promise(r => setTimeout(r, 1000));
+            const pollRes = await fetch(`${API_BASE}/pairing/sessions/${sessionId}/status`);
+            if (pollRes.ok) {
+              const statusData = await pollRes.json();
+              if (statusData.status === 'APPROVED') {
+                await chrome.storage.local.set({
+                  focusguard_token: statusData.deviceToken,
+                  focusguard_device_token: statusData.deviceToken,
+                  focusguard_device_id: statusData.deviceId,
+                  fg_pairing_status: 'PAIRED'
+                });
+                authToken = statusData.deviceToken;
+                cachedDeviceId = statusData.deviceId;
+                approved = true;
+                await initializeExtension();
+                sendResponse({ success: true, deviceId: statusData.deviceId });
+                break;
+              } else if (statusData.status === 'REJECTED') {
+                sendResponse({ success: false, error: 'Pairing request was rejected by account owner' });
+                return;
+              } else if (statusData.status === 'CANCELLED' || statusData.status === 'EXPIRED') {
+                sendResponse({ success: false, error: 'Pairing session expired or cancelled' });
+                return;
+              }
+            }
+          }
+
+          if (!approved) {
+            sendResponse({ success: false, error: 'Pairing timed out waiting for owner approval' });
+          }
+        } catch (e) {
+          sendResponse({ success: false, error: e.message || 'Pairing error' });
+        }
+      })();
+      return true;
     }
   });
 }
