@@ -2,7 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 const PUBLIC_DIR = __dirname;
 
 const MIME_TYPES = {
@@ -15,6 +15,12 @@ const MIME_TYPES = {
 };
 
 const server = http.createServer((req, res) => {
+  if (req.url === '/favicon.ico') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
   let filePath = path.join(PUBLIC_DIR, req.url === '/' ? 'index.html' : req.url);
   const ext = path.extname(filePath).toLowerCase();
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';
@@ -35,6 +41,6 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`FocusGuard Web Application running at http://localhost:${PORT}`);
 });

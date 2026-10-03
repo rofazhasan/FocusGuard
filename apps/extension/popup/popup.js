@@ -71,19 +71,39 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Handle Pairing Form Submission
   const btnSubmitPair = document.getElementById('btn-submit-pair');
+  const codeInput = document.getElementById('input-pairing-code');
+
+  if (codeInput) {
+    codeInput.addEventListener('input', (e) => {
+      e.target.value = e.target.value.toUpperCase();
+    });
+    codeInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        if (btnSubmitPair) btnSubmitPair.click();
+      }
+    });
+  }
+
   if (btnSubmitPair) {
     btnSubmitPair.addEventListener('click', () => {
-      const codeInput = document.getElementById('input-pairing-code');
       const msgEl = document.getElementById('pairing-msg');
-      const code = (codeInput ? codeInput.value : '').trim();
+      let rawCode = (codeInput ? codeInput.value : '').trim().toUpperCase();
 
-      if (!code) {
+      if (!rawCode) {
         if (msgEl) {
           msgEl.style.display = 'block';
           msgEl.style.color = '#f87171';
-          msgEl.textContent = 'Please enter a 6-character pairing code';
+          msgEl.textContent = 'Please enter a pairing code from your dashboard';
         }
         return;
+      }
+
+      // Canonical normalization
+      let cleanCode = rawCode.replace(/\s+/g, '').replace(/_/g, '');
+      if (cleanCode.startsWith('FG') && !cleanCode.startsWith('FG-')) {
+        cleanCode = 'FG-' + cleanCode.slice(2);
+      } else if (!cleanCode.startsWith('FG-')) {
+        cleanCode = 'FG-' + cleanCode;
       }
 
       btnSubmitPair.disabled = true;
@@ -94,7 +114,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         msgEl.textContent = 'Submitting request. Approve in your dashboard...';
       }
 
-      chrome.runtime.sendMessage({ type: 'SUBMIT_PAIRING_CODE', code: code }, (resp) => {
+      chrome.runtime.sendMessage({ type: 'SUBMIT_PAIRING_CODE', code: cleanCode }, (resp) => {
         btnSubmitPair.disabled = false;
         btnSubmitPair.textContent = 'Pair';
 

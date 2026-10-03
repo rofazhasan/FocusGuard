@@ -51,10 +51,25 @@ document.addEventListener("DOMContentLoaded", async () => {
   initWebSocket();
 });
 
+function isJwtExpired(token) {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return true;
+    const base64Url = parts[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(atob(base64).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+    const payload = JSON.parse(jsonPayload);
+    if (!payload.exp) return false;
+    return Date.now() >= (payload.exp * 1000 - 5000);
+  } catch (e) {
+    return true;
+  }
+}
+
 // 1. Authentication Layer
 async function ensureAuthentication() {
   const savedToken = localStorage.getItem("focusguard_token");
-  if (savedToken) {
+  if (savedToken && !isJwtExpired(savedToken)) {
     state.token = savedToken;
     try {
       const meRes = await fetch(`${API_BASE}/auth/me`, {
@@ -66,10 +81,14 @@ async function ensureAuthentication() {
         updateUserUI();
         updateConnectionStatus(true);
         return;
+      } else {
+        localStorage.removeItem("focusguard_token");
       }
     } catch (e) {
       console.warn("Auth check failed with cached token:", e);
     }
+  } else if (savedToken) {
+    localStorage.removeItem("focusguard_token");
   }
 
   // Fallback to default demo user for frictionless local zero-config
@@ -234,7 +253,10 @@ function handleWebSocketEvent(msg) {
   if (msg.event === "USAGE_TICK") {
     const payload = msg.payload;
     if (payload.targetValue) {
-      document.getElementById("live-active-target").innerText = `Active: ${payload.targetValue}`;
+      const activeEl = document.getElementById("live-active-target");
+      if (activeEl) {
+        activeEl.innerText = `Active: ${payload.targetValue}`;
+      }
     }
     refreshAnalyticsSilently();
   } else if (msg.event === "LIMIT_REACHED") {
@@ -343,7 +365,124 @@ function renderAnalyticsUI() {
       `;
     }
   }
+
+  renderLiveDomainTable();
 }
+
+function renderLiveDomainTable() {
+  const tbody = document.getElementById("domain-activity-tbody");
+  const countBadge = document.getElementById("domain-activity-count");
+  if (!tbody) return;
+
+  state.liveDomainUsage = state.liveDomainUsage || {};
+
+  const targetsMap = new Map();
+
+  (state.policies || []).forEach(p => {
+    (p.targets || []).forEach(t => {
+      const val = t.targetValue;
+      if (!targetsMap.has(val)) {
+        targetsMap.set(val, {
+          target: val,
+          type: t.targetType,
+          policyName: p.name,
+          policyId: p.id,
+          limitSeconds: p.limitSeconds,
+          isEnabled: p.isEnabled !== false,
+          usedSeconds: state.liveDomainUsage[val] || 0
+        });
+      }
+    });
+  });
+
+  for (const [key, sec] of Object.entries(state.liveDomainUsage)) {
+    if (!targetsMap.has(key)) {
+      targetsMap.set(key, {
+        target: key,
+        type: "DOMAIN",
+        policyName: "Unrestricted",
+        policyId: null,
+        limitSeconds: 0,
+        isEnabled: true,
+        usedSeconds: sec
+      });
+    }
+  }
+
+  const items = Array.from(targetsMap.values());
+  if (countBadge) countBadge.innerText = `${items.length} Tracked`;
+
+  if (items.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #94a3b8; padding: 24px;">No domain activity detected yet. Open a website in your browser to begin monitoring.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = items.map(item => {
+    const usedMins = Math.round(item.usedSeconds / 60);
+    const limitMins = Math.round(item.limitSeconds / 60);
+    const isExceeded = item.limitSeconds > 0 && item.usedSeconds >= item.limitSeconds;
+    const isWarn = item.limitSeconds > 0 && !isExceeded && (item.usedSeconds / item.limitSeconds >= 0.8);
+
+    let statusHtml = `<span class="badge badge-green">PERMITTED</span>`;
+    if (!item.isEnabled) {
+      statusHtml = `<span class="badge badge-yellow">POLICY PAUSED</span>`;
+    } else if (isExceeded) {
+      statusHtml = `<span class="badge badge-red">BLOCKED (Limit Exceeded)</span>`;
+    } else if (isWarn) {
+      statusHtml = `<span class="badge badge-yellow">NEAR LIMIT (${usedMins}/${limitMins}m)</span>`;
+    } else if (item.limitSeconds === 0 && item.policyId) {
+      statusHtml = `<span class="badge badge-red">BLOCKED (24/7)</span>`;
+    }
+
+    const budgetDisplay = item.limitSeconds > 0 ? `${limitMins}m daily` : (item.policyId ? 'Always Blocked' : 'No Limit');
+
+    return `
+      <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
+        <td style="padding: 12px 14px; font-weight: 600;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 16px;">🌐</span>
+            <span>${escapeHtml(item.target)}</span>
+          </div>
+          <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">Policy: ${escapeHtml(item.policyName)}</div>
+        </td>
+        <td style="padding: 12px 14px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">${usedMins}m (${item.usedSeconds}s)</td>
+        <td style="padding: 12px 14px; font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #a855f7;">${budgetDisplay}</td>
+        <td style="padding: 12px 14px;">${statusHtml}</td>
+        <td style="padding: 12px 14px; text-align: right;">
+          <button class="btn btn-sm btn-outline" onclick="quickApplyDomainBlock('${escapeHtml(item.target)}')" style="font-size: 11px; padding: 4px 8px;">
+            ${isExceeded ? 'Blocked' : 'Block Now'}
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+}
+
+window.quickApplyDomainBlock = async function(domain) {
+  try {
+    const res = await fetch(`${API_BASE}/policies`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${state.token}`
+      },
+      body: JSON.stringify({
+        name: `Restricted: ${domain}`,
+        limitSeconds: 0,
+        period: "DAILY",
+        timezone: "UTC",
+        enforcementMode: "BLOCK",
+        targets: [{ targetType: "WEBSITE", targetValue: domain }]
+      })
+    });
+    if (res.ok) {
+      await refreshAllData();
+      await fetchAuditLogs();
+    }
+  } catch (e) {
+    console.error("Quick apply block error:", e);
+  }
+};
 
 function renderDevicesUI() {
   const container = document.getElementById("device-list-container");
@@ -487,15 +626,22 @@ function renderPoliciesUI() {
     const scopeDesc = (p.assignedDeviceIds && p.assignedDeviceIds.length > 0)
       ? `${p.assignedDeviceIds.length} Targeted Device(s)`
       : "Fleetwide (Shared Budget)";
+    const isEnforcing = p.isEnabled !== false;
 
     return `
-      <div class="policy-item">
+      <div class="policy-item" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; margin-bottom: 8px; border-radius: 10px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06);">
         <div class="policy-info">
-          <div class="policy-title">${escapeHtml(p.name)}</div>
-          <div class="text-small text-muted">Target: <strong style="color: var(--color-text-main);">${targetNames}</strong> • Scope: <span style="color: #60a5fa;">${scopeDesc}</span></div>
+          <div class="policy-title" style="display: flex; align-items: center; gap: 8px;">
+            <span>${escapeHtml(p.name)}</span>
+            <span class="badge ${isEnforcing ? 'badge-green' : 'badge-red'}" style="font-size: 10px;">${isEnforcing ? 'ACTIVE' : 'PAUSED'}</span>
+          </div>
+          <div class="text-small text-muted" style="margin-top: 3px;">Target: <strong style="color: var(--color-text-main);">${targetNames}</strong> • Scope: <span style="color: #60a5fa;">${scopeDesc}</span></div>
         </div>
-        <div class="policy-actions">
-          <span class="badge badge-purple font-mono">${mins}m / day</span>
+        <div class="policy-actions" style="display: flex; align-items: center; gap: 8px;">
+          <span class="badge badge-purple font-mono">${p.limitSeconds > 0 ? `${mins}m / day` : 'Always Blocked'}</span>
+          <button class="btn btn-sm btn-outline" onclick="togglePolicy('${p.id}')" style="font-size: 11px; padding: 4px 8px;">
+            ${isEnforcing ? '⏸ Pause' : '▶ Resume'}
+          </button>
           <button class="btn-icon-delete" onclick="deletePolicy('${p.id}')" title="Delete Policy">🗑️</button>
         </div>
       </div>
@@ -505,6 +651,23 @@ function renderPoliciesUI() {
   container.innerHTML = html;
   if (managedContainer) managedContainer.innerHTML = html;
 }
+
+window.togglePolicy = async function(id) {
+  try {
+    const res = await fetch(`${API_BASE}/policies/${id}/toggle`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${state.token}`
+      }
+    });
+    if (res.ok) {
+      await refreshAllData();
+      await fetchAuditLogs();
+    }
+  } catch (e) {
+    console.error("Toggle policy error:", e);
+  }
+};
 
 function renderAuditLogsUI() {
   const container = document.getElementById("audit-list-container");
@@ -728,27 +891,31 @@ async function toggleFocusSession() {
       }).catch(() => {});
 
       // 2. Dispatch remote focus command to fleet nodes
-      const res = await fetch(`${API_BASE}/commands/dispatch`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${state.token}`
-        },
-        body: JSON.stringify({
-          deviceId: state.managedTabletDeviceId,
-          commandType: "REMOTE_FOCUS_START",
-          durationSec: state.selectedFocusMins * 60,
-          payload: {
-            durationMinutes: state.selectedFocusMins,
-            blockedCategories: ["VIDEO", "SOCIAL", "GAMING"],
-            blockedDomains: ["youtube.com", "instagram.com", "reddit.com"]
-          }
-        })
-      });
-      if (res.ok) {
-        startFocusTimerUI(state.selectedFocusMins);
-        await fetchAuditLogs();
+      const targetDeviceIds = state.devices && state.devices.length > 0
+        ? state.devices.map(d => d.id)
+        : (state.managedTabletDeviceId ? [state.managedTabletDeviceId] : []);
+
+      for (const devId of targetDeviceIds) {
+        await fetch(`${API_BASE}/commands/dispatch`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${state.token}`
+          },
+          body: JSON.stringify({
+            deviceId: devId,
+            commandType: "REMOTE_FOCUS_START",
+            durationSec: state.selectedFocusMins * 60,
+            payload: {
+              durationMinutes: state.selectedFocusMins,
+              blockedCategories: ["VIDEO", "SOCIAL", "GAMING"],
+              blockedDomains: ["youtube.com", "instagram.com", "reddit.com"]
+            }
+          })
+        }).catch(() => {});
       }
+      startFocusTimerUI(state.selectedFocusMins);
+      await fetchAuditLogs();
     } catch (e) {
       console.error("Remote focus dispatch error:", e);
     }
@@ -1050,19 +1217,89 @@ function setupEventListeners() {
     }
   });
 
-  // Cross-Device Sync Delta Buttons
-  document.getElementById("btn-sync-mac-youtube").addEventListener("click", () => {
-    syncUsageDelta("youtube.com", 300, state.macDeviceId);
-  });
-  document.getElementById("btn-sync-mac-reddit").addEventListener("click", () => {
-    syncUsageDelta("reddit.com", 300, state.macDeviceId);
-  });
-  document.getElementById("btn-sync-android-youtube").addEventListener("click", () => {
-    syncUsageDelta("youtube.com", 300, state.managedTabletDeviceId);
-  });
-  document.getElementById("btn-sync-android-instagram").addEventListener("click", () => {
-    syncUsageDelta("instagram.com", 300, state.managedTabletDeviceId);
-  });
+  // Quick 1-Click Domain Rule Creator Listeners
+  const btnQuickCreate = document.getElementById("btn-quick-create-rule");
+  const btnQuickBlock = document.getElementById("btn-quick-block-permanently");
+  const quickDomainInput = document.getElementById("quick-domain-input");
+  const quickLimitInput = document.getElementById("quick-limit-input");
+  const quickFeedback = document.getElementById("quick-rule-feedback");
+
+  if (btnQuickCreate) {
+    btnQuickCreate.addEventListener("click", async () => {
+      const domain = (quickDomainInput?.value || "").trim().toLowerCase();
+      const mins = parseInt(quickLimitInput?.value, 10) || 15;
+      if (!domain) return;
+
+      try {
+        const res = await fetch(`${API_BASE}/policies`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${state.token}`
+          },
+          body: JSON.stringify({
+            name: `${domain} Attention Cap`,
+            limitSeconds: Math.max(1, mins * 60),
+            period: "DAILY",
+            timezone: "UTC",
+            enforcementMode: "BLOCK",
+            targets: [{ targetType: "WEBSITE", targetValue: domain }]
+          })
+        });
+
+        if (res.ok) {
+          if (quickFeedback) {
+            quickFeedback.innerText = `✓ Created rule for ${domain} (${mins}m/day). Synchronized to all fleet devices.`;
+            quickFeedback.style.display = "block";
+            setTimeout(() => { if (quickFeedback) quickFeedback.style.display = "none"; }, 4000);
+          }
+          if (quickDomainInput) quickDomainInput.value = "";
+          await refreshAllData();
+          await fetchAuditLogs();
+        }
+      } catch (e) {
+        console.error("Create quick rule error:", e);
+      }
+    });
+  }
+
+  if (btnQuickBlock) {
+    btnQuickBlock.addEventListener("click", async () => {
+      const domain = (quickDomainInput?.value || "").trim().toLowerCase();
+      if (!domain) return;
+
+      try {
+        const res = await fetch(`${API_BASE}/policies`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${state.token}`
+          },
+          body: JSON.stringify({
+            name: `Block ${domain} Permanently`,
+            limitSeconds: 0,
+            period: "DAILY",
+            timezone: "UTC",
+            enforcementMode: "BLOCK",
+            targets: [{ targetType: "WEBSITE", targetValue: domain }]
+          })
+        });
+
+        if (res.ok) {
+          if (quickFeedback) {
+            quickFeedback.innerText = `✓ ${domain} is now permanently blocked fleetwide 24/7.`;
+            quickFeedback.style.display = "block";
+            setTimeout(() => { if (quickFeedback) quickFeedback.style.display = "none"; }, 4000);
+          }
+          if (quickDomainInput) quickDomainInput.value = "";
+          await refreshAllData();
+          await fetchAuditLogs();
+        }
+      } catch (e) {
+        console.error("Block quick rule error:", e);
+      }
+    });
+  }
 
   // Audit Refresh
   document.getElementById("btn-refresh-audit").addEventListener("click", fetchAuditLogs);
@@ -1523,12 +1760,11 @@ function setupEventListeners() {
 function updateConnectionStatus(connected) {
   const badge = document.getElementById("system-status");
   const text = document.getElementById("status-text");
-  if (connected) {
-    badge.className = "status-badge status-protected";
-    text.innerText = "Fleet Protected • Synced";
-  } else {
-    badge.className = "status-badge status-degraded";
-    text.innerText = "Offline Mode • Local Shields Active";
+  if (badge) {
+    badge.className = connected ? "status-badge status-protected" : "status-badge status-degraded";
+  }
+  if (text) {
+    text.innerText = connected ? "Fleet Protected • Synced" : "Offline Mode • Local Shields Active";
   }
 }
 

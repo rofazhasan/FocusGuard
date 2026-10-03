@@ -48,8 +48,43 @@ class ExtensionPolicyEngine {
   }
 
   updateUsage(targetValue, deltaSeconds) {
-    const current = this.todayUsage[targetValue] || 0;
-    this.todayUsage[targetValue] = current + deltaSeconds;
+    const clean = this.matcher ? this.matcher.normalizeDomain(targetValue) : targetValue.toLowerCase();
+    const apex = clean.replace(/^www\./, '');
+    const currentApex = this.todayUsage[apex] || 0;
+    this.todayUsage[apex] = currentApex + deltaSeconds;
+    if (clean !== apex) {
+      this.todayUsage[clean] = this.todayUsage[apex];
+    }
+  }
+
+  getUsedSeconds(domain, targetObj) {
+    if (!this.todayUsage) return 0;
+    const cleanDomain = this.matcher ? this.matcher.normalizeDomain(domain) : domain.toLowerCase();
+    const apexDomain = cleanDomain.replace(/^www\./, '');
+    let total = 0;
+
+    if (targetObj) {
+      if (targetObj.targetType === 'WEBSITE' || targetObj.targetType === 'DOMAIN') {
+        const targetVal = (targetObj.targetValue || '').toLowerCase().replace(/^www\./, '');
+        for (const [key, sec] of Object.entries(this.todayUsage)) {
+          const cleanKey = this.matcher ? this.matcher.normalizeDomain(key) : key.toLowerCase();
+          if (this.matcher ? this.matcher.isDomainMatch(cleanKey, targetVal) : (cleanKey === targetVal || cleanKey.endsWith('.' + targetVal))) {
+            total = Math.max(total, sec);
+          }
+        }
+      } else if (targetObj.targetType === 'CATEGORY') {
+        for (const [key, sec] of Object.entries(this.todayUsage)) {
+          if (this.getCategory(key).toUpperCase() === (targetObj.targetValue || '').toUpperCase()) {
+            total += sec;
+          }
+        }
+      } else {
+        total = this.todayUsage[targetObj.targetValue] || 0;
+      }
+    }
+
+    const direct = this.todayUsage[apexDomain] || this.todayUsage[cleanDomain] || 0;
+    return Math.max(total, direct);
   }
 
   getCategory(domain) {
@@ -64,18 +99,6 @@ class ExtensionPolicyEngine {
 
   /**
    * Evaluates if a given URL or domain should be blocked or warned.
-   * 
-   * Returns:
-   * {
-   *   action: 'ALLOW' | 'BLOCK' | 'WARN',
-   *   reason: string,
-   *   policyName: string,
-   *   limitMinutes: number,
-   *   usedMinutes: number,
-   *   remainingMinutes: number,
-   *   percentageUsed: number,
-   *   nextReset: string
-   * }
    */
   evaluate(url) {
     const domain = this.matcher ? this.matcher.normalizeDomain(url) : url;
@@ -108,28 +131,32 @@ class ExtensionPolicyEngine {
     const checkMatch = (policy) => {
       let isMatched = false;
       let matchedTarget = null;
+      let matchedTargetObj = null;
       for (const target of policy.targets || []) {
         if (target.targetType === 'WEBSITE' || target.targetType === 'DOMAIN') {
           if (this.matcher.isDomainMatch(domain, target.targetValue)) {
             isMatched = true;
             matchedTarget = target.targetValue;
+            matchedTargetObj = target;
             break;
           }
         } else if (target.targetType === 'CATEGORY') {
           if (target.targetValue.toUpperCase() === category.toUpperCase()) {
             isMatched = true;
             matchedTarget = category;
+            matchedTargetObj = target;
             break;
           }
         } else if (target.targetType === 'URL_PATTERN') {
           if (this.matcher.isUrlPatternMatch(url, target.targetValue)) {
             isMatched = true;
             matchedTarget = target.targetValue;
+            matchedTargetObj = target;
             break;
           }
         }
       }
-      return { isMatched, matchedTarget };
+      return { isMatched, matchedTarget, matchedTargetObj };
     };
 
     // 2. Precedence Phase 1: Check Explicit BLOCK policies (limitSeconds <= 0)
@@ -160,9 +187,9 @@ class ExtensionPolicyEngine {
       const limitSeconds = policy.limitSeconds || policy.limit || 0;
       if (limitSeconds <= 0) continue;
 
-      const { isMatched, matchedTarget } = checkMatch(policy);
+      const { isMatched, matchedTarget, matchedTargetObj } = checkMatch(policy);
       if (isMatched) {
-        const usedSeconds = this.todayUsage[matchedTarget] || this.todayUsage[domain] || 0;
+        const usedSeconds = this.getUsedSeconds(domain, matchedTargetObj);
         if (usedSeconds >= limitSeconds) {
           return {
             action: 'BLOCK',
@@ -194,9 +221,9 @@ class ExtensionPolicyEngine {
       const limitSeconds = policy.limitSeconds || policy.limit || 0;
       if (limitSeconds <= 0) continue;
 
-      const { isMatched, matchedTarget } = checkMatch(policy);
+      const { isMatched, matchedTarget, matchedTargetObj } = checkMatch(policy);
       if (isMatched) {
-        const usedSeconds = this.todayUsage[matchedTarget] || this.todayUsage[domain] || 0;
+        const usedSeconds = this.getUsedSeconds(domain, matchedTargetObj);
         const remainingSeconds = Math.max(0, limitSeconds - usedSeconds);
         const percentage = Math.min(100, Math.round((usedSeconds / limitSeconds) * 100));
 

@@ -26,6 +26,9 @@ func TestHashCode(t *testing.T) {
 	code := "FG-A2B3C4"
 	hash1 := hashCode(code)
 	hash2 := hashCode("  fg-a2b3c4  ") // Case-insensitive and trimmed
+	hash3 := hashCode("A2B3C4")       // Without FG- prefix
+	hash4 := hashCode("FG - A2B3C4")  // Spaces around hyphen
+	hash5 := hashCode("fg a2b3c4")    // Space instead of hyphen
 
 	if hash1 == "" {
 		t.Errorf("Hash must not be empty")
@@ -33,5 +36,14 @@ func TestHashCode(t *testing.T) {
 
 	if hash1 != hash2 {
 		t.Errorf("Hash must normalize case and whitespace: %s vs %s", hash1, hash2)
+	}
+	if hash1 != hash3 {
+		t.Errorf("Hash must auto-add prefix if missing: %s vs %s", hash1, hash3)
+	}
+	if hash1 != hash4 {
+		t.Errorf("Hash must strip internal spaces: %s vs %s", hash1, hash4)
+	}
+	if hash1 != hash5 {
+		t.Errorf("Hash must normalize space-separated code: %s vs %s", hash1, hash5)
 	}
 }

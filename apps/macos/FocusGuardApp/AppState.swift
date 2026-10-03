@@ -53,6 +53,27 @@ public final class AppState: ObservableObject {
         self.container = container
         refreshState()
         startPeriodicTracking()
+        startPeriodicSync()
+    }
+
+    private var syncTask: Task<Void, Never>?
+
+    public func startPeriodicSync() {
+        if container.deviceService.isEnrolled() {
+            container.realtimeService.connect()
+            syncEventsNow()
+        }
+
+        syncTask?.cancel()
+        syncTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                guard let self = self, !Task.isCancelled else { break }
+                if self.container.deviceService.isEnrolled() {
+                    self.syncEventsNow()
+                }
+            }
+        }
     }
 
     public func refreshState() {
@@ -113,6 +134,69 @@ public final class AppState: ObservableObject {
             self.statusMessage = "Device successfully paired!"
         } catch {
             self.statusMessage = "Pairing error: \(error.localizedDescription)"
+        }
+    }
+
+    public func pairWithCode(code: String) async {
+        let cleanCode = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        guard !cleanCode.isEmpty else {
+            self.statusMessage = "Please enter a valid pairing code."
+            return
+        }
+
+        self.statusMessage = "Submitting pairing code to FocusGuard Cloud..."
+        guard let url = URL(string: "http://localhost:8080/api/v1/pairing/request") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let payload: [String: Any] = [
+            "pairingCode": cleanCode,
+            "deviceName": self.deviceName,
+            "platform": "MACOS",
+            "clientType": "DESKTOP",
+            "appVersion": "1.0.0",
+            "publicKey": self.publicKeyPem,
+            "keyAlgorithm": "Ed25519"
+        ]
+
+        guard let httpBody = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        req.httpBody = httpBody
+
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard let httpResp = resp as? HTTPURLResponse, httpResp.statusCode == 200 || httpResp.statusCode == 201 else {
+                await MainActor.run { self.statusMessage = "Pairing failed: Invalid or expired code." }
+                return
+            }
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let sessionId = json["sessionId"] as? String else {
+                await MainActor.run { self.statusMessage = "Invalid session response from server." }
+                return
+            }
+
+            await MainActor.run { self.statusMessage = "Request pending: Please click 'Approve' in your web dashboard..." }
+
+            for _ in 0..<30 {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let pollUrl = URL(string: "http://localhost:8080/api/v1/pairing/sessions/\(sessionId)/status") else { break }
+                if let (pData, pResp) = try? await URLSession.shared.data(from: pollUrl),
+                   let pHttp = pResp as? HTTPURLResponse, pHttp.statusCode == 200,
+                   let pJson = try? JSONSerialization.jsonObject(with: pData) as? [String: Any],
+                   let status = pJson["status"] as? String, status == "APPROVED",
+                   let devIdStr = pJson["deviceId"] as? String,
+                   let devUuid = UUID(uuidString: devIdStr),
+                   let token = pJson["deviceToken"] as? String {
+                    await MainActor.run {
+                        self.pairDevice(deviceId: devUuid, deviceToken: token)
+                        self.statusMessage = "Device enrolled & synchronized with FocusGuard Cloud!"
+                    }
+                    return
+                }
+            }
+            await MainActor.run { self.statusMessage = "Pairing timed out. Please try again." }
+        } catch {
+            await MainActor.run { self.statusMessage = "Connection error: \(error.localizedDescription)" }
         }
     }
 
@@ -194,5 +278,6 @@ public final class AppState: ObservableObject {
 
     deinit {
         trackingTask?.cancel()
+        syncTask?.cancel()
     }
 }

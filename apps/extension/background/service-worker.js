@@ -119,12 +119,8 @@ const sessionTracker = new SessionTracker({
   }
 });
 
-/**
- * Redirects tab to the FocusGuard block page and emits an enforcement event.
- */
-async function redirectToBlockPage(tabId, urlOrDomain, evalResult) {
-  const normDomain = typeof DomainMatcher !== 'undefined' ? DomainMatcher.normalizeDomain(urlOrDomain) : urlOrDomain;
-  const blockUrl = chrome.runtime.getURL(
+function buildBlockPageUrl(normDomain, evalResult) {
+  return chrome.runtime.getURL(
     `pages/block.html?target=${encodeURIComponent(normDomain)}` +
     `&reason=${encodeURIComponent(evalResult.reason || 'Attention Budget Reached')}` +
     `&policy=${encodeURIComponent(evalResult.policyName || 'FocusGuard Policy')}` +
@@ -132,6 +128,34 @@ async function redirectToBlockPage(tabId, urlOrDomain, evalResult) {
     `&limit=${encodeURIComponent(evalResult.limitMinutes || 30)}` +
     `&reset=${encodeURIComponent(evalResult.nextReset || '12:00 AM')}`
   );
+}
+
+/**
+ * Redirects tab to the FocusGuard block page, registers network-level DNR rule, and emits an enforcement event.
+ */
+async function redirectToBlockPage(tabId, urlOrDomain, evalResult) {
+  const normDomain = typeof DomainMatcher !== 'undefined' ? DomainMatcher.normalizeDomain(urlOrDomain) : urlOrDomain;
+  const blockUrl = buildBlockPageUrl(normDomain, evalResult);
+
+  // Instantly enforce at network level via DeclarativeNetRequest so reload/new tabs cannot bypass
+  if (typeof chrome !== 'undefined' && chrome.declarativeNetRequest && typeof DNRPolicyCompiler !== 'undefined') {
+    const ruleId = DNRPolicyCompiler.getDeterministicRuleId(normDomain);
+    chrome.declarativeNetRequest.updateDynamicRules({
+      removeRuleIds: [ruleId],
+      addRules: [{
+        id: ruleId,
+        priority: 95,
+        action: {
+          type: 'redirect',
+          redirect: { url: blockUrl }
+        },
+        condition: {
+          urlFilter: `||${normDomain}^`,
+          resourceTypes: ['main_frame']
+        }
+      }]
+    }).catch(() => {});
+  }
 
   const devId = await getOrCreateDeviceId();
   const eventId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('evt_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9));
@@ -156,7 +180,9 @@ async function redirectToBlockPage(tabId, urlOrDomain, evalResult) {
   // Attempt immediate flush if online
   flushOfflineEvents().catch(() => {});
 
-  chrome.tabs.update(tabId, { url: blockUrl });
+  if (typeof chrome !== 'undefined' && chrome.tabs && tabId) {
+    chrome.tabs.update(tabId, { url: blockUrl }).catch(() => {});
+  }
 }
 
 /**
@@ -497,8 +523,46 @@ if (chrome.alarms) {
   });
 }
 
-// ---------------- Runtime Message Interceptors (Popup / UI Bridge) ----------------
+// ---------------- Real-time Active Content Script Channel ----------------
+if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onConnect) {
+  chrome.runtime.onConnect.addListener((port) => {
+    if (port.name !== 'focusguard-tracker') return;
 
+    port.onMessage.addListener(async (msg) => {
+      const tabId = port.sender?.tab?.id;
+      if (!tabId || !msg || !msg.url) return;
+
+      const normDomain = typeof DomainMatcher !== 'undefined' 
+        ? DomainMatcher.normalizeDomain(msg.hostname || msg.url) 
+        : (msg.hostname || 'unknown');
+
+      if (msg.type === 'PAGE_ACTIVE_TICK') {
+        policyEngine.updateUsage(normDomain, 1);
+        await policyCache.setTodayUsage(policyEngine.todayUsage);
+
+        const evalResult = policyEngine.evaluate(msg.url);
+        if (evalResult.action === 'BLOCK') {
+          const blockUrl = buildBlockPageUrl(normDomain, evalResult);
+          try {
+            port.postMessage({ type: 'ENFORCE_BLOCK', blockUrl });
+          } catch (e) {}
+          redirectToBlockPage(tabId, msg.url, evalResult);
+        }
+      } else if (msg.type === 'SPA_NAVIGATION') {
+        const evalResult = policyEngine.evaluate(msg.url);
+        if (evalResult.action === 'BLOCK') {
+          const blockUrl = buildBlockPageUrl(normDomain, evalResult);
+          try {
+            port.postMessage({ type: 'ENFORCE_BLOCK', blockUrl });
+          } catch (e) {}
+          redirectToBlockPage(tabId, msg.url, evalResult);
+        }
+      }
+    });
+  });
+}
+
+// ---------------- Runtime Message Interceptors (Popup / UI Bridge) ----------------
 if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'GET_STATUS') {
@@ -524,8 +588,12 @@ if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage)
       (async () => {
         try {
           const devId = await getOrCreateDeviceId();
-          const devName = 'Browser Extension (' + (navigator.userAgent.includes('Firefox') ? 'Firefox' : 'Chrome') + ')';
-          const code = (request.code || '').trim().toUpperCase();
+          let code = (request.code || '').trim().toUpperCase().replace(/\s+/g, '').replace(/_/g, '');
+          if (code.startsWith('FG') && !code.startsWith('FG-')) {
+            code = 'FG-' + code.slice(2);
+          } else if (!code.startsWith('FG-') && code.length > 0) {
+            code = 'FG-' + code;
+          }
 
           const reqRes = await fetch(`${API_BASE}/pairing/request`, {
             method: 'POST',

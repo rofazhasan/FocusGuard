@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -177,18 +178,22 @@ func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 			if cron.Valid {
 				p.ScheduleCron = cron.String
 			}
+			policiesList = append(policiesList, p)
+		}
+		rows.Close()
 
-			// Query targets for policy
+		// Query targets & assignments after outer rows cursor is closed (avoids SQLite deadlock)
+		for i := range policiesList {
 			tq := `SELECT id, policy_id, target_type, target_value FROM policy_targets WHERE policy_id = $1`
-			trows, err := h.db.QueryContext(r.Context(), tq, p.ID.String())
+			trows, err := h.db.QueryContext(r.Context(), tq, policiesList[i].ID.String())
 			if err == nil {
-				p.Targets = []PolicyTarget{}
+				policiesList[i].Targets = []PolicyTarget{}
 				for trows.Next() {
 					var tidStr, tpidStr, ttypeStr, tval string
 					if err := trows.Scan(&tidStr, &tpidStr, &ttypeStr, &tval); err == nil {
 						tid, _ := uuid.Parse(tidStr)
 						tpid, _ := uuid.Parse(tpidStr)
-						p.Targets = append(p.Targets, PolicyTarget{
+						policiesList[i].Targets = append(policiesList[i].Targets, PolicyTarget{
 							ID:          tid,
 							PolicyID:    tpid,
 							TargetType:  TargetType(ttypeStr),
@@ -201,19 +206,17 @@ func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 
 			// Query assigned device IDs
 			aq := `SELECT device_id FROM policy_assignments WHERE policy_id = $1`
-			arows, err := h.db.QueryContext(r.Context(), aq, p.ID.String())
+			arows, err := h.db.QueryContext(r.Context(), aq, policiesList[i].ID.String())
 			if err == nil {
-				p.AssignedDeviceIDs = []string{}
+				policiesList[i].AssignedDeviceIDs = []string{}
 				for arows.Next() {
 					var devID string
 					if err := arows.Scan(&devID); err == nil {
-						p.AssignedDeviceIDs = append(p.AssignedDeviceIDs, devID)
+						policiesList[i].AssignedDeviceIDs = append(policiesList[i].AssignedDeviceIDs, devID)
 					}
 				}
 				arows.Close()
 			}
-
-			policiesList = append(policiesList, p)
 		}
 	}
 
@@ -262,6 +265,44 @@ func (h *Handler) DeletePolicy(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "DELETED", "id": policyID})
+}
+
+func (h *Handler) TogglePolicy(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.GetUserClaims(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	policyID := chi.URLParam(r, "id")
+	if policyID == "" {
+		http.Error(w, `{"error":"Policy ID required"}`, http.StatusBadRequest)
+		return
+	}
+
+	if h.db != nil {
+		q := `UPDATE policies SET is_enabled = CASE WHEN is_enabled = 1 THEN 0 ELSE 1 END, version = version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2`
+		_, err := h.db.ExecContext(r.Context(), q, policyID, claims.UserID.String())
+		if err != nil {
+			logger.Error("Failed to toggle policy", "error", err)
+			http.Error(w, `{"error":"Database error"}`, http.StatusInternalServerError)
+			return
+		}
+
+		if h.wsHub != nil {
+			h.wsHub.BroadcastToUser(claims.UserID, events.EventMessage{
+				Event: "POLICY_UPDATED",
+				Payload: map[string]interface{}{
+					"policyId": policyID,
+					"action":   "TOGGLE",
+				},
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"OK"}`))
 }
 
 func (h *Handler) SimulatePolicy(w http.ResponseWriter, r *http.Request) {
@@ -380,12 +421,63 @@ func (h *Handler) SyncDevicePolicies(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+	}
 
-		if deviceIDStr != "" {
-			now := time.Now().UTC()
-			_, _ = h.db.ExecContext(r.Context(), `UPDATE sync_cursors SET last_policy_version = $1, last_sync_at = $2, updated_at = $2 WHERE device_id = $3`,
-				maxVersion, now, deviceIDStr)
+	clientPlatform := strings.ToUpper(r.Header.Get("X-Client-Platform"))
+	if clientPlatform == "" {
+		clientPlatform = strings.ToUpper(r.Header.Get("X-Client-Type"))
+	}
+	if clientPlatform == "" {
+		clientPlatform = strings.ToUpper(r.URL.Query().Get("platform"))
+	}
+
+	if h.db != nil && deviceIDStr != "" && clientPlatform == "" {
+		var plat string
+		err := h.db.QueryRowContext(r.Context(), `SELECT platform FROM devices WHERE id = $1`, deviceIDStr).Scan(&plat)
+		if err == nil {
+			clientPlatform = strings.ToUpper(plat)
 		}
+	}
+
+	filteredPolicies := []Policy{}
+	for _, p := range policiesList {
+		// 1. Device assignment scoping check: if policy is explicitly assigned to nodes, ensure this node is included
+		if h.db != nil && deviceIDStr != "" {
+			var assignmentCount int
+			err := h.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM policy_assignments WHERE policy_id = $1`, p.ID.String()).Scan(&assignmentCount)
+			if err == nil && assignmentCount > 0 {
+				var assignedToThisDev int
+				err := h.db.QueryRowContext(r.Context(), `SELECT COUNT(*) FROM policy_assignments WHERE policy_id = $1 AND device_id = $2`, p.ID.String(), deviceIDStr).Scan(&assignedToThisDev)
+				if err == nil && assignedToThisDev == 0 {
+					continue // Target device is not assigned this policy
+				}
+			}
+		}
+
+		// 2. Capability negotiation & target pruning
+		// WebExtension clients can only enforce DOMAIN_BLOCKING (TargetWebsite, TargetDomain, TargetCategory), NOT TargetApp native processes
+		if clientPlatform == "WEB_EXTENSION" || clientPlatform == "EXTENSION" {
+			prunedTargets := []PolicyTarget{}
+			for _, t := range p.Targets {
+				if t.TargetType != TargetApp {
+					prunedTargets = append(prunedTargets, t)
+				}
+			}
+			if len(prunedTargets) == 0 && len(p.Targets) > 0 {
+				continue // Skip policy as it only contains native app targets unsupported by extension
+			}
+			p.Targets = prunedTargets
+		}
+
+		filteredPolicies = append(filteredPolicies, p)
+	}
+
+	policiesList = filteredPolicies
+
+	if h.db != nil && deviceIDStr != "" {
+		now := time.Now().UTC()
+		_, _ = h.db.ExecContext(r.Context(), `UPDATE sync_cursors SET last_policy_version = $1, last_sync_at = $2, updated_at = $2 WHERE device_id = $3`,
+			maxVersion, now, deviceIDStr)
 	}
 
 	now := time.Now().UTC()

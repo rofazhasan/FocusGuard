@@ -75,6 +75,9 @@ func main() {
 	tokenService := auth.NewTokenService(jwtSecret)
 	policyEvaluator := policies.NewEvaluator()
 	wsHub := events.NewHub()
+	if db != nil {
+		wsHub.SetDB(db)
+	}
 
 	go wsHub.Run()
 
@@ -117,6 +120,38 @@ func main() {
 		_, _ = db.Exec(`INSERT INTO devices (id, user_id, device_name, platform, client_type, os_version, app_version, role, is_managed, status, protection_state, policy_version, last_seen_at, created_at)
 		                VALUES ($1, $2, $3, $4, 'MACOS_AGENT', $5, '1.0.0', 'OWNER', 0, 'ACTIVE', 'PROTECTED', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		                ON CONFLICT (id) DO NOTHING`, defaultDeviceID.String(), defaultUserID.String(), hostName, platform, osVer)
+
+		extDeviceID := "5028eea4-8da8-431a-91c7-d637a6837f9f"
+		_, _ = db.Exec(`INSERT INTO devices (id, user_id, device_name, platform, client_type, os_version, app_version, role, is_managed, status, protection_state, policy_version, last_seen_at, created_at)
+		                VALUES ($1, $2, 'Google Chrome Extension', 'WEB_EXTENSION', 'EXTENSION', $3, '1.0.0', 'MANAGED', 1, 'ACTIVE', 'PROTECTED', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		                ON CONFLICT (id) DO NOTHING`, extDeviceID, defaultUserID.String(), osVer)
+
+		// Seed Initial Production Attention Policies
+		var polCount int
+		_ = db.QueryRow(`SELECT COUNT(*) FROM policies WHERE user_id = $1`, defaultUserID.String()).Scan(&polCount)
+		if polCount == 0 {
+			pol1ID := "00000000-0000-0000-0000-000000000010"
+			_, _ = db.Exec(`INSERT INTO policies (id, user_id, name, limit_seconds, period, timezone, enforcement_mode, is_enabled, version, created_at, updated_at)
+			                VALUES ($1, $2, 'Social & Video Attention Budget', 1800, 'DAILY', 'UTC', 'BLOCK', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+				pol1ID, defaultUserID.String())
+
+			targets1 := []string{"youtube.com", "instagram.com", "reddit.com", "tiktok.com", "facebook.com", "x.com"}
+			for _, t := range targets1 {
+				_, _ = db.Exec(`INSERT INTO policy_targets (id, policy_id, target_type, target_value)
+				                VALUES ($1, $2, 'WEBSITE', $3)`, uuid.New().String(), pol1ID, t)
+			}
+
+			pol2ID := "00000000-0000-0000-0000-000000000020"
+			_, _ = db.Exec(`INSERT INTO policies (id, user_id, name, limit_seconds, period, timezone, enforcement_mode, is_enabled, version, created_at, updated_at)
+			                VALUES ($1, $2, 'Gaming & Distraction Cap', 1200, 'DAILY', 'UTC', 'BLOCK', 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+				pol2ID, defaultUserID.String())
+
+			targets2 := []string{"twitch.tv", "discord.com", "steampowered.com", "roblox.com"}
+			for _, t := range targets2 {
+				_, _ = db.Exec(`INSERT INTO policy_targets (id, policy_id, target_type, target_value)
+				                VALUES ($1, $2, 'WEBSITE', $3)`, uuid.New().String(), pol2ID, t)
+			}
+		}
 	}
 
 	// Real macOS Background Activity Collector
@@ -212,6 +247,7 @@ func main() {
 		r.Post("/api/v1/policies", policiesHandler.CreatePolicy)
 		r.Get("/api/v1/policies", policiesHandler.ListPolicies)
 		r.Delete("/api/v1/policies/{id}", policiesHandler.DeletePolicy)
+		r.Post("/api/v1/policies/{id}/toggle", policiesHandler.TogglePolicy)
 		r.Post("/api/v1/policies/simulate", policiesHandler.SimulatePolicy)
 		r.Post("/api/v1/policies/explain", policiesHandler.ExplainPolicy)
 
@@ -230,6 +266,7 @@ func main() {
 		r.Get("/api/v1/analytics/timeline", analyticsHandler.GetTimeline)
 		r.Get("/api/v1/analytics/enforcement-timeline", analyticsHandler.GetEnforcementTimeline)
 		r.Get("/api/v1/analytics/recommendations", analyticsHandler.GetRecommendations)
+		r.Post("/api/v1/analytics/interval-union", analyticsHandler.CalculateIntervalUnionEndpoint)
 
 		// Focus Sessions
 		r.Post("/api/v1/focus/start", focusHandler.StartFocus)
@@ -238,7 +275,7 @@ func main() {
 		r.Get("/api/v1/focus/presets", focusHandler.GetFocusPresets)
 	})
 
-	// Device or User Authenticated Endpoints (Sync, Heartbeat, Events)
+	// Device or User Authenticated Endpoints (Sync, Heartbeat, Events, Commands)
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.DeviceOrUserAuthMiddleware(db, tokenService))
 
@@ -246,6 +283,8 @@ func main() {
 		r.Get("/api/v1/device/policies/sync", policiesHandler.SyncDevicePolicies)
 		r.Post("/api/v1/usage/sync", usageHandler.SyncUsage)
 		r.Post("/api/v1/events/batch", batchEventsHandler.HandleBatchEvents)
+		r.Post("/api/v1/commands/{id}/ack", commandsHandler.AcknowledgeCommand)
+		r.Get("/api/v1/commands/pending", commandsHandler.GetPendingCommands)
 	})
 
 	server := &http.Server{

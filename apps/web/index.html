@@ -32,6 +32,12 @@
         <button class="mode-btn" id="btn-mode-managed">📱 Managed Device View</button>
       </div>
 
+      <!-- Actions / Badges -->
+      <div class="navbar-actions" style="display: flex; align-items: center; gap: 10px;">
+        <div class="status-badge status-protected" id="system-status">
+          <span style="color: #10b981; margin-right: 4px;">●</span>
+          <span id="status-text">Fleet Protected • Synced</span>
+        </div>
         <div class="user-account-badge" id="user-account-badge" style="display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: #cbd5e1; background: rgba(255,255,255,0.05); padding: 5px 12px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.1);">
           <span style="color: #10b981;">●</span>
           <span id="user-email-display">demo@focusguard.local</span>
@@ -166,133 +172,96 @@
         </div>
 
         <div class="focus-action-row" style="display: flex; gap: 12px; margin-top: 15px;">
-          <button class="btn btn-focus" id="btn-toggle-focus" style="flex: 2;">
+          <button class="btn btn-focus" id="btn-toggle-focus" style="flex: 1;">
             <span class="focus-icon">⚡</span>
             <span id="focus-btn-text">DISPATCH REMOTE FOCUS (45m)</span>
           </button>
-          <button class="btn btn-primary" id="btn-run-capstone-demo" style="flex: 1; background: linear-gradient(135deg, #4f46e5, #9333ea);">
-            <span>🚀 1-Click Capstone Demo</span>
-          </button>
-        </div>
-
-        <!-- Capstone Demo Status Drawer -->
-        <div id="capstone-demo-drawer" style="display: none; background: rgba(79, 70, 229, 0.1); border: 1px solid #4f46e5; border-radius: 10px; padding: 14px; margin-top: 15px; font-size: 13px;">
-          <div style="font-weight: bold; color: #a5b4fc; margin-bottom: 6px;" id="demo-step-title">Capstone Live Demonstration Workflow:</div>
-          <div id="demo-step-log" style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #e0e7ff; line-height: 1.6;">
-            1. Dispatching Study Mode to MacBook, Android Phone & Extension...
-          </div>
         </div>
       </section>
 
-      <!-- Section 5: Cross-Device Usage Ingestion & Shared Limit Test -->
-      <section class="card simulator-card">
+      <!-- Section 5: Real-Time Fleet Activity & Domain Usage Monitor -->
+      <section class="card">
         <div class="card-title-row">
           <div>
-            <h2 class="card-title">Shared Attention Limit & Ingestion Test</h2>
-            <p class="subtitle">Simulate real usage deltas across MacBook (Owner), Tablet (Managed), and Extension to verify simultaneous fleet enforcement.</p>
+            <h2 class="card-title">Live Fleet Activity & Domain Usage</h2>
+            <p class="subtitle">Real-time telemetry aggregated across your macOS workstation and browser extension.</p>
           </div>
-          <span class="badge badge-green">Idempotent Sync</span>
+          <span class="badge badge-green" id="fleet-live-pulse">● Live Telemetry</span>
         </div>
 
-        <div class="sim-controls-grid">
-          <div class="sim-device-box">
-            <div class="sim-header">
-              <span>💻 MacBook Pro (Owner Node)</span>
-              <span class="text-muted font-mono" id="sim-mac-status">Active</span>
-            </div>
-            <p class="text-small text-muted mb-2">Record activity on Owner Mac:</p>
-            <div class="btn-group">
-              <button class="btn btn-sm btn-outline" id="btn-sync-mac-youtube">+ 5m YouTube</button>
-              <button class="btn btn-sm btn-outline" id="btn-sync-mac-reddit">+ 5m Reddit</button>
-            </div>
-          </div>
-
-          <div class="sim-device-box">
-            <div class="sim-header">
-              <span>📱 Student Pixel Tablet (Managed Node)</span>
-              <span class="text-muted font-mono" id="sim-android-status">Active</span>
-            </div>
-            <p class="text-small text-muted mb-2">Record activity on Managed Tablet:</p>
-            <div class="btn-group">
-              <button class="btn btn-sm btn-outline" id="btn-sync-android-youtube">+ 5m YouTube</button>
-              <button class="btn btn-sm btn-outline" id="btn-sync-android-instagram">+ 5m Instagram</button>
-            </div>
-          </div>
-
-          <div class="sim-total-box">
-            <div class="sim-header">
-              <span>☁️ Shared Cloud Aggregation</span>
-              <span class="text-bold font-mono" id="sim-cloud-summary">0s consumed</span>
-            </div>
-            <div class="progress-bar-container">
-              <div class="progress-bar-fill fill-red" id="sim-progress-fill" style="width: 0%;"></div>
-            </div>
-            <p class="text-small text-muted mt-2" id="sim-enforcement-text">When combined total reaches 30m, LIMIT_REACHED triggers on ALL devices.</p>
-          </div>
+        <div id="live-domain-usage-table" style="margin-top: 15px; overflow-x: auto;">
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+            <thead>
+              <tr style="border-bottom: 1px solid var(--border-color); text-align: left; color: var(--text-muted); font-size: 11px; text-transform: uppercase;">
+                <th style="padding: 10px 14px;">Domain / Target</th>
+                <th style="padding: 10px 14px;">Category</th>
+                <th style="padding: 10px 14px;">Time Spent Today</th>
+                <th style="padding: 10px 14px; width: 35%;">Daily Budget Progress</th>
+                <th style="padding: 10px 14px; text-align: right;">Policy Action</th>
+              </tr>
+            </thead>
+            <tbody id="domain-activity-tbody">
+              <!-- Dynamically populated from real telemetry -->
+            </tbody>
+          </table>
         </div>
       </section>
 
-      <!-- Section 6: Policy Simulator & Conflict Detector & Policy Explainer -->
+      <!-- Section 6: Real-Time Policy Inspector & Quick Rule Creator -->
       <section class="two-col-grid">
-        <!-- Tool A: Policy Simulator & Conflict Detector -->
+        <!-- Quick Domain Policy Inspector -->
         <div class="card">
           <div class="card-title-row">
             <div>
-              <h2 class="card-title">Policy Simulator & Conflict Detector</h2>
-              <span class="text-muted text-small">Dry-run policies before fleetwide dispatch</span>
-            </div>
-            <span class="badge badge-blue">Dry Run</span>
-          </div>
-
-          <div class="form-row mt-2">
-            <div class="form-group" style="flex: 2;">
-              <label class="text-small text-muted">Test Target / Category</label>
-              <input type="text" id="sim-test-target-input" class="form-control" value="SOCIAL" placeholder="e.g. SOCIAL, youtube.com">
-            </div>
-            <div class="form-group" style="flex: 1;">
-              <label class="text-small text-muted">Mode</label>
-              <select id="sim-test-mode-select" class="form-control">
-                <option value="BLOCK" selected>BLOCK</option>
-                <option value="ALLOW">ALLOW</option>
-              </select>
-            </div>
-          </div>
-          <button class="btn btn-sm btn-primary mt-2" id="btn-run-simulation">Run Policy Simulation</button>
-
-          <div class="sim-result-box mt-3" id="sim-result-container" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px; font-size: 12px;">
-            <div class="text-bold text-purple" id="sim-res-action">Ready to simulate.</div>
-            <div class="text-muted mt-1" id="sim-res-explanation">Click 'Run Policy Simulation' to check impacted domains, devices, and conflicts.</div>
-            <div class="mt-2 text-small" id="sim-res-domains"></div>
-            <div class="mt-2 text-small text-yellow" id="sim-res-conflicts"></div>
-          </div>
-        </div>
-
-        <!-- Tool B: Policy Explainer -->
-        <div class="card">
-          <div class="card-title-row">
-            <div>
-              <h2 class="card-title">Policy Explainer ("Why Blocked?")</h2>
-              <span class="text-muted text-small">Inspect reasons for domain enforcement</span>
+              <h2 class="card-title">Policy Adherence Inspector</h2>
+              <span class="text-muted text-small">Check real-time enforcement rules for any website</span>
             </div>
             <span class="badge badge-purple">Inspector</span>
           </div>
 
           <div class="form-group mt-2">
-            <label class="text-small text-muted">Enter Domain to Inspect</label>
+            <label class="text-small text-muted">Enter Domain or URL</label>
             <div style="display: flex; gap: 8px;">
-              <input type="text" id="explain-domain-input" class="form-control" value="m.youtube.com" placeholder="e.g. m.youtube.com">
+              <input type="text" id="explain-domain-input" class="form-control" value="youtube.com" placeholder="e.g. youtube.com, reddit.com">
               <button class="btn btn-sm btn-secondary" id="btn-explain-domain">Inspect</button>
             </div>
           </div>
 
-          <div class="explain-result-box mt-3" id="explain-result-container" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px; font-size: 12px;">
+          <div class="explain-result-box mt-3" id="explain-result-container" style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 14px; font-size: 12px;">
             <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span class="text-bold" id="explain-target-title">m.youtube.com</span>
-              <span class="badge badge-red" id="explain-status-badge">RESTRICTED</span>
+              <span class="text-bold" style="font-size: 14px;" id="explain-target-title">youtube.com</span>
+              <span class="badge badge-purple" id="explain-status-badge">RESTRICTED</span>
             </div>
-            <div class="mt-2 text-muted" id="explain-reason-text">Daily attention budget reached (YouTube Daily Budget).</div>
-            <div class="mt-2 text-small" style="color: #818cf8;" id="explain-layer-text">Enforcing Layer: BROWSER_EXTENSION / VPN_DNS_SINKHOLE</div>
+            <div class="mt-2" style="color: #cbd5e1;" id="explain-reason-text">30-minute daily budget enforced by Social & Video Attention Budget policy.</div>
+            <div class="mt-2 text-small" style="color: #818cf8;" id="explain-layer-text">Enforcing Layer: BROWSER_EXTENSION / NATIVE_AGENT</div>
           </div>
+        </div>
+
+        <!-- Quick 1-Click Domain Rule Creator -->
+        <div class="card">
+          <div class="card-title-row">
+            <div>
+              <h2 class="card-title">Instant Domain Rule</h2>
+              <span class="text-muted text-small">Quickly add or restrict a distracting website</span>
+            </div>
+            <span class="badge badge-blue">Instant Rule</span>
+          </div>
+
+          <div class="form-row mt-2">
+            <div class="form-group" style="flex: 2;">
+              <label class="text-small text-muted">Target Domain</label>
+              <input type="text" id="quick-domain-input" class="form-control" placeholder="e.g. twitter.com, twitch.tv">
+            </div>
+            <div class="form-group" style="flex: 1;">
+              <label class="text-small text-muted">Daily Limit (mins)</label>
+              <input type="number" id="quick-limit-input" class="form-control" value="15" min="0" max="480">
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px; margin-top: 10px;">
+            <button class="btn btn-sm btn-primary" id="btn-quick-create-rule" style="flex: 1;">Save & Apply Fleetwide</button>
+            <button class="btn btn-sm btn-outline" id="btn-quick-block-permanently" style="color: #f87171; border-color: rgba(239,68,68,0.3);">Block 24/7</button>
+          </div>
+          <div id="quick-rule-feedback" style="display: none; margin-top: 8px; font-size: 11px; color: #34d399;"></div>
         </div>
       </section>
 

@@ -12,8 +12,12 @@ mkdir -p "$REPO_ROOT/.pids"
 
 echo -e "${BLUE}==> Starting FocusGuard Cloud API Backend (:8080)...${NC}"
 cd "$REPO_ROOT/backend"
-go run cmd/server/main.go > "$REPO_ROOT/.pids/backend.log" 2>&1 &
+if [ ! -f "bin/server" ]; then
+  go build -o bin/server cmd/server/main.go
+fi
+nohup ./bin/server > "$REPO_ROOT/.pids/backend.log" 2>&1 </dev/null &
 BACKEND_PID=$!
+disown $BACKEND_PID 2>/dev/null || true
 echo $BACKEND_PID > "$REPO_ROOT/.pids/backend.pid"
 
 # Wait for backend to become ready
@@ -21,8 +25,9 @@ sleep 1.5
 
 echo -e "${BLUE}==> Starting FocusGuard Fleet Command Center (:3001)...${NC}"
 cd "$REPO_ROOT/apps/web"
-PORT=3001 node server.js > "$REPO_ROOT/.pids/web.log" 2>&1 &
+PORT=3001 nohup node server.js > "$REPO_ROOT/.pids/web.log" 2>&1 </dev/null &
 WEB_PID=$!
+disown $WEB_PID 2>/dev/null || true
 echo $WEB_PID > "$REPO_ROOT/.pids/web.pid"
 
 sleep 1

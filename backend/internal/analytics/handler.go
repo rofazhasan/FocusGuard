@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -480,4 +481,94 @@ func (h *Handler) GetRecommendations(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(recs)
 }
+
+type TimeInterval struct {
+	Start int64 `json:"start"`
+	End   int64 `json:"end"`
+}
+
+type IntervalUnionRequest struct {
+	Intervals []TimeInterval `json:"intervals"`
+}
+
+type IntervalUnionResponse struct {
+	RawSumSeconds   int64          `json:"rawSumSeconds"`
+	UnionSeconds    int64          `json:"unionSeconds"`
+	MergedIntervals []TimeInterval `json:"mergedIntervals"`
+}
+
+// CalculateIntervalUnion implements the canonical O(n log n) interval union algorithm
+func CalculateIntervalUnion(intervals []TimeInterval) IntervalUnionResponse {
+	if len(intervals) == 0 {
+		return IntervalUnionResponse{
+			RawSumSeconds:   0,
+			UnionSeconds:    0,
+			MergedIntervals: []TimeInterval{},
+		}
+	}
+
+	var rawSum int64 = 0
+	validIntervals := make([]TimeInterval, 0, len(intervals))
+	for _, iv := range intervals {
+		if iv.End > iv.Start {
+			rawSum += (iv.End - iv.Start)
+			validIntervals = append(validIntervals, iv)
+		}
+	}
+
+	if len(validIntervals) == 0 {
+		return IntervalUnionResponse{
+			RawSumSeconds:   0,
+			UnionSeconds:    0,
+			MergedIntervals: []TimeInterval{},
+		}
+	}
+
+	sort.Slice(validIntervals, func(i, j int) bool {
+		if validIntervals[i].Start == validIntervals[j].Start {
+			return validIntervals[i].End < validIntervals[j].End
+		}
+		return validIntervals[i].Start < validIntervals[j].Start
+	})
+
+	merged := []TimeInterval{validIntervals[0]}
+	for i := 1; i < len(validIntervals); i++ {
+		curr := validIntervals[i]
+		lastIdx := len(merged) - 1
+
+		if curr.Start <= merged[lastIdx].End {
+			if curr.End > merged[lastIdx].End {
+				merged[lastIdx].End = curr.End
+			}
+		} else {
+			merged = append(merged, curr)
+		}
+	}
+
+	var unionSec int64 = 0
+	for _, m := range merged {
+		unionSec += (m.End - m.Start)
+	}
+
+	return IntervalUnionResponse{
+		RawSumSeconds:   rawSum,
+		UnionSeconds:    unionSec,
+		MergedIntervals: merged,
+	}
+}
+
+func (h *Handler) CalculateIntervalUnionEndpoint(w http.ResponseWriter, r *http.Request) {
+	var req IntervalUnionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"Invalid request payload"}`, http.StatusBadRequest)
+		return
+	}
+
+	res := CalculateIntervalUnion(req.Intervals)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(res)
+}
+
 

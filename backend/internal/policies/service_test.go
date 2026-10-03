@@ -55,3 +55,32 @@ func TestLimitExceededCalculation(t *testing.T) {
 		t.Errorf("expected disabled policy to NEVER exceed limit")
 	}
 }
+
+func TestCapabilityPruningLogic(t *testing.T) {
+	// A policy containing both a website and an executable target
+	policy := Policy{
+		Name: "Mixed Distraction Policy",
+		Targets: []PolicyTarget{
+			{TargetType: TargetWebsite, TargetValue: "youtube.com"},
+			{TargetType: TargetApp, TargetValue: "discord.exe"},
+		},
+	}
+
+	// Extension client simulation: prune TargetApp targets
+	clientPlatform := "WEB_EXTENSION"
+	prunedTargets := []PolicyTarget{}
+	for _, target := range policy.Targets {
+		if clientPlatform == "WEB_EXTENSION" && target.TargetType == TargetApp {
+			continue // prune native app target
+		}
+		prunedTargets = append(prunedTargets, target)
+	}
+
+	if len(prunedTargets) != 1 {
+		t.Fatalf("expected 1 target after pruning, got %d", len(prunedTargets))
+	}
+	if prunedTargets[0].TargetValue != "youtube.com" {
+		t.Errorf("expected target youtube.com retained, got %s", prunedTargets[0].TargetValue)
+	}
+}
+

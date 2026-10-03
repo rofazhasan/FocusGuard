@@ -226,6 +226,16 @@ func (c *ActivityCollector) checkExtensionWatchdog(appName string, now time.Time
 	c.activeBrowserName = appName
 	c.mu.Unlock()
 
+	// Check if the user has enrolled at least one extension device
+	if c.db != nil {
+		var count int
+		err := c.db.QueryRow(`SELECT COUNT(*) FROM devices WHERE user_id = $1 AND (platform = 'BROWSER_EXTENSION' OR platform = 'WEB_EXTENSION' OR client_type = 'EXTENSION')`, userID.String()).Scan(&count)
+		if err == nil && count == 0 {
+			// No extension enrolled yet; user is currently onboarding/pairing. Suppress alarm.
+			return
+		}
+	}
+
 	// Check if extension is active (heartbeat within 25 seconds)
 	isExtActive := false
 	if c.wsHub != nil {
@@ -318,6 +328,10 @@ func (c *ActivityCollector) forceTerminateBrowser(appName string) {
 	if runtime.GOOS == "darwin" {
 		script := fmt.Sprintf(`tell application "%s" to quit`, appName)
 		_ = exec.Command("osascript", "-e", script).Run()
+		go func() {
+			time.Sleep(1 * time.Second)
+			_ = exec.Command("pkill", "-9", "-f", appName).Run()
+		}()
 	}
 }
 

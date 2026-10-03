@@ -35,8 +35,25 @@ func NewHandler(db *sql.DB, tokenService *auth.TokenService, wsHub *events.Hub) 
 	}
 }
 
+func normalizePairingCode(code string) string {
+	clean := strings.ToUpper(strings.TrimSpace(code))
+	clean = strings.ReplaceAll(clean, " ", "")
+	clean = strings.ReplaceAll(clean, "_", "")
+	if strings.HasPrefix(clean, "FG-") {
+		return clean
+	}
+	if strings.HasPrefix(clean, "FG") {
+		return "FG-" + strings.TrimPrefix(clean, "FG")
+	}
+	if len(clean) > 0 {
+		return "FG-" + clean
+	}
+	return clean
+}
+
 func hashCode(code string) string {
-	sum := sha256.Sum256([]byte(strings.ToUpper(strings.TrimSpace(code))))
+	canonical := normalizePairingCode(code)
+	sum := sha256.Sum256([]byte(canonical))
 	return hex.EncodeToString(sum[:])
 }
 

@@ -4,7 +4,9 @@ import FocusGuardCore
 public struct DevicesView: View {
     @EnvironmentObject var appState: AppState
     @State private var pairingTokenInput: String = ""
+    @State private var pairingCodeInput: String = ""
     @State private var customDeviceIdInput: String = UUID().uuidString
+    @State private var isSubmittingCode: Bool = false
 
     public init() {}
 
@@ -55,33 +57,48 @@ public struct DevicesView: View {
                         Text("Enroll as FocusGuard Device")
                             .font(.system(size: 16, weight: .bold, design: .rounded))
 
-                        Text("Pair with your FocusGuard account using a device token from the Web Extension or Web Dashboard.")
+                        Text("Pair with your FocusGuard account using the 6-character code shown on your Web Dashboard (http://localhost:3001).")
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
 
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Device Token / Pairing Secret")
+                            Text("Dashboard Pairing Code (e.g. FG-XXXXXX)")
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundColor(.secondary)
-                            SecureField("Paste pairing token here...", text: $pairingTokenInput)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                            HStack {
+                                TextField("FG-XXXXXX", text: $pairingCodeInput)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .font(.system(size: 14, design: .monospaced))
+
+                                Button(isSubmittingCode ? "Enrolling..." : "Pair with Code") {
+                                    isSubmittingCode = true
+                                    Task {
+                                        await appState.pairWithCode(code: pairingCodeInput)
+                                        isSubmittingCode = false
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(pairingCodeInput.isEmpty || isSubmittingCode)
+                            }
                         }
 
-                        HStack {
-                            Button("Pair Device") {
-                                if let devUuid = UUID(uuidString: customDeviceIdInput) {
-                                    appState.pairDevice(deviceId: devUuid, deviceToken: pairingTokenInput)
+                        Divider().padding(.vertical, 4)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Advanced: Direct Device Token")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.secondary)
+                            HStack {
+                                SecureField("Paste raw token...", text: $pairingTokenInput)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                Button("Connect Token") {
+                                    if let devUuid = UUID(uuidString: customDeviceIdInput) {
+                                        appState.pairDevice(deviceId: devUuid, deviceToken: pairingTokenInput)
+                                    }
                                 }
+                                .buttonStyle(.bordered)
+                                .disabled(pairingTokenInput.isEmpty)
                             }
-                            .buttonStyle(.borderedProminent)
-
-                            Spacer()
-
-                            Button("Generate Demo Pairing") {
-                                let demoUuid = UUID()
-                                appState.pairDevice(deviceId: demoUuid, deviceToken: "demo_macos_token_\(demoUuid.uuidString)")
-                            }
-                            .buttonStyle(.bordered)
                         }
                     }
                     .padding(16)

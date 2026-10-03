@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/focusguard/focusguard/backend/internal/events"
 	"github.com/focusguard/focusguard/backend/internal/middleware"
@@ -115,3 +116,90 @@ func (h *Handler) DispatchCommand(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(resp)
 }
+
+type AcknowledgeCommandRequest struct {
+	Status  string                 `json:"status"` // "ACKNOWLEDGED", "EXECUTING", "SUCCEEDED", "FAILED"
+	Details string                 `json:"details,omitempty"`
+	Payload map[string]interface{} `json:"payload,omitempty"`
+}
+
+func (h *Handler) AcknowledgeCommand(w http.ResponseWriter, r *http.Request) {
+	cmdID := chi.URLParam(r, "id")
+	if cmdID == "" {
+		http.Error(w, `{"error":"Command ID is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	var req AcknowledgeCommandRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		req.Status = "SUCCEEDED"
+	}
+	if req.Status == "" {
+		req.Status = "SUCCEEDED"
+	}
+
+	if h.db != nil {
+		q := `UPDATE remote_commands SET status = $1 WHERE id = $2`
+		_, err := h.db.ExecContext(r.Context(), q, req.Status, cmdID)
+		if err != nil {
+			logger.Error("Failed to update command acknowledgement status", "error", err, "commandId", cmdID)
+			http.Error(w, `{"error":"Database error updating command status"}`, http.StatusInternalServerError)
+			return
+		}
+
+		auditQ := `INSERT INTO audit_logs (id, user_id, action, details, timestamp)
+		          VALUES ($1, 'system', 'REMOTE_COMMAND_ACK', $2, CURRENT_TIMESTAMP)`
+		_, _ = h.db.ExecContext(r.Context(), auditQ, uuid.New().String(), "Command "+cmdID+" status: "+req.Status)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"commandId": cmdID,
+		"status":    req.Status,
+		"updatedAt": time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+func (h *Handler) GetPendingCommands(w http.ResponseWriter, r *http.Request) {
+	deviceID := r.URL.Query().Get("deviceId")
+	if devCtx, ok := middleware.GetDeviceClaims(r.Context()); ok {
+		deviceID = devCtx.DeviceID.String()
+	}
+
+	if deviceID == "" {
+		http.Error(w, `{"error":"deviceId parameter required"}`, http.StatusBadRequest)
+		return
+	}
+
+	commands := []RemoteCommandResponse{}
+	if h.db != nil {
+		q := `SELECT id, device_id, command_type, issued_at, expires_at, status, payload
+		      FROM remote_commands
+		      WHERE device_id = $1 AND status IN ('PENDING', 'DISPATCHED') AND expires_at > CURRENT_TIMESTAMP
+		      ORDER BY issued_at ASC`
+		rows, err := h.db.QueryContext(r.Context(), q, deviceID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var cmd RemoteCommandResponse
+				var pStr string
+				if err := rows.Scan(&cmd.CommandID, &cmd.DeviceID, &cmd.CommandType, &cmd.IssuedAt, &cmd.ExpiresAt, &cmd.Status, &pStr); err == nil {
+					var pMap map[string]interface{}
+					if err := json.Unmarshal([]byte(pStr), &pMap); err == nil {
+						cmd.Payload = pMap
+					}
+					commands = append(commands, cmd)
+				}
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"commands": commands,
+		"count":    len(commands),
+	})
+}
+
