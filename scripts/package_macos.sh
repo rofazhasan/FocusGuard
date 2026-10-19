@@ -33,6 +33,17 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 cp "$RELEASE_BIN" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 chmod +x "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
+# Copy App Icon and Brand Assets
+if [ -d "$MACOS_DIR/FocusGuardApp/Resources" ]; then
+    cp -R "$MACOS_DIR/FocusGuardApp/Resources/"* "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
+fi
+
+# Copy SwiftPM Resource Bundle if present
+SWIFT_BUNDLE=$(find "$MACOS_DIR/.build" -name "FocusGuard_FocusGuardApp.bundle" 2>/dev/null | head -n 1 || true)
+if [ -n "$SWIFT_BUNDLE" ] && [ -d "$SWIFT_BUNDLE" ]; then
+    cp -R "$SWIFT_BUNDLE" "$APP_BUNDLE/Contents/Resources/"
+fi
+
 # Generate Info.plist
 cat << 'EOF' > "$APP_BUNDLE/Contents/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
@@ -45,6 +56,10 @@ cat << 'EOF' > "$APP_BUNDLE/Contents/Info.plist"
     <string>com.focusguard.macos</string>
     <key>CFBundleName</key>
     <string>FocusGuard</string>
+    <key>CFBundleDisplayName</key>
+    <string>FocusGuard</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -57,16 +72,28 @@ cat << 'EOF' > "$APP_BUNDLE/Contents/Info.plist"
     <false/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
 </dict>
 </plist>
 EOF
 
-echo "[4/4] Generating ZIP archive for distribution..."
+# Ad-hoc codesign bundle so Gatekeeper recognizes it
+echo "[4/5] Codesigning application bundle..."
+codesign --force --deep -s - "$APP_BUNDLE"
+
+# Install directly to /Applications
+echo "[5/5] Installing FocusGuard.app into /Applications..."
+rm -rf "/Applications/$APP_NAME.app"
+cp -R "$APP_BUNDLE" "/Applications/$APP_NAME.app"
+
+# Generate ZIP archive for distribution
 cd "$DIST_DIR"
 zip -r -q "$APP_NAME-macOS-v1.0.0.zip" "$APP_NAME.app"
 
 echo "================================================================================"
-echo "SUCCESS: FocusGuard macOS bundle packaged!"
-echo "App Bundle: $APP_BUNDLE"
-echo "Archive:    $DIST_DIR/$APP_NAME-macOS-v1.0.0.zip"
+echo "SUCCESS: FocusGuard macOS app installed & packaged!"
+echo "Installed to: /Applications/$APP_NAME.app"
+echo "Dist Bundle:  $APP_BUNDLE"
+echo "Archive:      $DIST_DIR/$APP_NAME-macOS-v1.0.0.zip"
 echo "================================================================================"
