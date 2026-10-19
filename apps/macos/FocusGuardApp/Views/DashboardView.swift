@@ -65,6 +65,9 @@ public struct DashboardView: View {
                     )
                 }
 
+                // Focus Lockdown Control Panel
+                FocusLockdownControlCard()
+
                 // Telemetry Cards
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
                     // Current Foreground
@@ -238,3 +241,127 @@ public struct DashboardView: View {
         }
     }
 }
+
+struct FocusLockdownControlCard: View {
+    @EnvironmentObject var appState: AppState
+    private let presets = [15, 25, 45, 60, 90]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center) {
+                HStack(spacing: 8) {
+                    Image(systemName: appState.isFocusActive ? "bolt.fill" : "bolt.shield")
+                        .font(.system(size: 18))
+                        .foregroundColor(appState.isFocusActive ? .orange : .accentColor)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(appState.isFocusActive ? "DEEP WORK LOCKDOWN ACTIVE" : "Fleet Deep Work Lockdown")
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .foregroundColor(appState.isFocusActive ? .orange : .primary)
+                        Text(appState.isFocusActive
+                             ? "Distraction blocking is enforced across this Mac and all enrolled fleet devices."
+                             : "Arm scheduled distraction suppression across all paired devices.")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Spacer()
+
+                if appState.isFocusActive {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(Color.orange)
+                            .frame(width: 8, height: 8)
+                        Text(formatCountdown(appState.focusRemainingSeconds))
+                            .font(.system(size: 18, weight: .heavy, design: .monospaced))
+                            .foregroundColor(.orange)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.orange.opacity(0.12))
+                    .cornerRadius(8)
+                }
+            }
+
+            Divider()
+
+            if appState.isFocusActive {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Session Time Remaining")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.secondary)
+                        Text("Ends automatically in \(appState.focusRemainingSeconds / 60) minutes")
+                            .font(.system(size: 12))
+                    }
+
+                    Spacer()
+
+                    Button(action: {
+                        Task { await appState.endFocusLockdown() }
+                    }) {
+                        Label("Release Fleet Lockdown", systemImage: "xmark.shield")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Duration Preset:")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.secondary)
+
+                        HStack(spacing: 8) {
+                            ForEach(presets, id: \.self) { minutes in
+                                Button(action: {
+                                    appState.selectedFocusPresetMinutes = minutes
+                                }) {
+                                    Text("\(minutes)m")
+                                        .font(.system(size: 12, weight: appState.selectedFocusPresetMinutes == minutes ? .bold : .regular))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 4)
+                                        .background(appState.selectedFocusPresetMinutes == minutes ? Color.accentColor : Color.secondary.opacity(0.12))
+                                        .foregroundColor(appState.selectedFocusPresetMinutes == minutes ? .white : .primary)
+                                        .cornerRadius(6)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+
+                        Spacer()
+
+                        Button(action: {
+                            Task {
+                                await appState.startFocusLockdown(minutes: appState.selectedFocusPresetMinutes)
+                            }
+                        }) {
+                            Label("Enforce Fleet Lockdown", systemImage: "bolt.fill")
+                                .font(.system(size: 12, weight: .bold))
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(appState.isFocusActive ? Color.orange.opacity(0.06) : Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(appState.isFocusActive ? Color.orange.opacity(0.3) : Color.secondary.opacity(0.12), lineWidth: 1)
+        )
+    }
+
+    private func formatCountdown(_ seconds: Int) -> String {
+        let m = seconds / 60
+        let s = seconds % 60
+        return String(format: "%02d:%02d", m, s)
+    }
+}
+

@@ -41,6 +41,96 @@ public struct ApplicationsView: View {
                 .background(Color.secondary.opacity(0.04))
                 .cornerRadius(10)
 
+                // Discovered Running Applications Picker
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Running Applications Discovery")
+                                .font(.system(size: 16, weight: .bold, design: .rounded))
+                            Text("Live apps running on your Mac. Click '+ Track' to monitor with FocusGuard policies.")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
+
+                        Spacer()
+
+                        Button(action: {
+                            appState.refreshRunningApplications()
+                        }) {
+                            Label("Refresh Apps", systemImage: "arrow.clockwise")
+                                .font(.system(size: 12))
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if appState.runningApplicationsList.isEmpty {
+                        Text("No running user applications discovered.")
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+                            .padding(.vertical, 8)
+                    } else {
+                        VStack(spacing: 6) {
+                            ForEach(appState.runningApplicationsList) { app in
+                                HStack(spacing: 10) {
+                                    Image(systemName: "app.window.checkmark")
+                                        .foregroundColor(app.isTracked ? .green : .secondary)
+                                        .font(.system(size: 16))
+                                        .frame(width: 22)
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(app.name)
+                                            .font(.system(size: 13, weight: .semibold))
+                                        Text(app.bundleIdentifier)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundColor(.secondary)
+                                    }
+
+                                    Spacer()
+
+                                    if app.isProtected {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "lock.shield")
+                                            Text("System Protected")
+                                        }
+                                        .font(.system(size: 10, weight: .bold))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(Color.orange.opacity(0.12))
+                                        .foregroundColor(.orange)
+                                        .cornerRadius(6)
+                                    } else if app.isTracked {
+                                        Button(action: {
+                                            appState.removeTrackedTarget(app.bundleIdentifier)
+                                        }) {
+                                            Label("Stop Tracking", systemImage: "minus.circle")
+                                                .font(.system(size: 11, weight: .medium))
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .tint(.red)
+                                    } else {
+                                        Button(action: {
+                                            appState.addTrackedTarget(app.bundleIdentifier)
+                                        }) {
+                                            Label("Track", systemImage: "plus.circle.fill")
+                                                .font(.system(size: 11, weight: .semibold))
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                    }
+                                }
+                                .padding(10)
+                                .background(Color(nsColor: .controlBackgroundColor))
+                                .cornerRadius(8)
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+                .background(Color.secondary.opacity(0.04))
+                .cornerRadius(12)
+                .onAppear {
+                    appState.refreshRunningApplications()
+                }
+
                 // Tracked Applications List
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Currently Tracked Applications (\(appState.trackedTargets.count))")

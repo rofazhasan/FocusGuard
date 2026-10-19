@@ -98,6 +98,8 @@ public struct MainAppView: View {
                     DevicesView()
                 case .diagnostics:
                     DiagnosticsView()
+                case .settings:
+                    SettingsView()
                 }
             }
             .frame(minWidth: 540, minHeight: 480)

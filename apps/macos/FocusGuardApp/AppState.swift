@@ -61,6 +61,58 @@ public final class AppState: ObservableObject {
     @Published public var totalWebsiteTime: String = "0s"
     @Published public var totalWebsiteSeconds: Int = 0
 
+    // Discovered Running Applications
+    public struct DiscoveredApp: Identifiable, Hashable, Sendable {
+        public var id: String { bundleIdentifier }
+        public let name: String
+        public let bundleIdentifier: String
+        public let isTracked: Bool
+        public let isProtected: Bool
+
+        public init(name: String, bundleIdentifier: String, isTracked: Bool, isProtected: Bool) {
+            self.name = name
+            self.bundleIdentifier = bundleIdentifier
+            self.isTracked = isTracked
+            self.isProtected = isProtected
+        }
+    }
+
+    @Published public var runningApplicationsList: [DiscoveredApp] = []
+
+    // Categorical Chart Data Point
+    public struct CategoryUsagePoint: Identifiable, Sendable {
+        public var id: String { category }
+        public let category: String
+        public let totalMinutes: Double
+        public let isDistraction: Bool
+
+        public init(category: String, totalMinutes: Double, isDistraction: Bool) {
+            self.category = category
+            self.totalMinutes = totalMinutes
+            self.isDistraction = isDistraction
+        }
+    }
+
+    public var categoryUsageBreakdown: [CategoryUsagePoint] {
+        var map: [String: (minutes: Double, isDistraction: Bool)] = [:]
+        for item in websiteUsageList {
+            let cat = item.category.isEmpty ? "Uncategorized" : item.category
+            let existing = map[cat] ?? (0.0, item.isDistraction)
+            map[cat] = (existing.minutes + (Double(item.totalSeconds) / 60.0), existing.isDistraction || item.isDistraction)
+        }
+        return map.map { (cat, val) in
+            CategoryUsagePoint(category: cat, totalMinutes: round(val.minutes * 10) / 10, isDistraction: val.isDistraction)
+        }.sorted { $0.totalMinutes > $1.totalMinutes }
+    }
+
+    // Interactive Focus Session Control
+    @Published public var selectedFocusPresetMinutes: Int = 45
+
+    // macOS Preferences / Settings
+    @Published public var serverBaseUrl: String = UserDefaults.standard.string(forKey: "fg_server_url") ?? "http://localhost:8080"
+    @Published public var idleThresholdSeconds: Int = UserDefaults.standard.integer(forKey: "fg_idle_threshold") == 0 ? 60 : UserDefaults.standard.integer(forKey: "fg_idle_threshold")
+    @Published public var soundAlertsEnabled: Bool = UserDefaults.standard.object(forKey: "fg_sound_alerts") == nil ? true : UserDefaults.standard.bool(forKey: "fg_sound_alerts")
+
     public enum NavigationItem: String, CaseIterable, Identifiable {
         case dashboard = "Dashboard"
         case usage = "Usage Analytics"
@@ -68,6 +120,7 @@ public final class AppState: ObservableObject {
         case applications = "Applications"
         case devices = "Devices & Pairing"
         case diagnostics = "Diagnostics & Security"
+        case settings = "Settings"
 
         public var id: String { rawValue }
         public var iconName: String {
@@ -78,6 +131,7 @@ public final class AppState: ObservableObject {
             case .applications: return "app.window.checkmark"
             case .devices: return "laptopcomputer"
             case .diagnostics: return "stethoscope"
+            case .settings: return "gearshape.fill"
             }
         }
     }
@@ -85,9 +139,13 @@ public final class AppState: ObservableObject {
     public init(container: DependencyContainer) {
         self.container = container
         refreshState()
+        refreshRunningApplications()
         setupRealtimeCallbacks()
         startPeriodicTracking()
         startPeriodicSync()
+        Task { [weak self] in
+            await self?.checkActiveFocusSession()
+        }
     }
 
     private func setupRealtimeCallbacks() {
@@ -234,6 +292,7 @@ public final class AppState: ObservableObject {
         self.activePolicies = (try? container.policyService.getAllPolicies()) ?? []
         self.trackedTargets = Array(container.usageService.getTrackedTargets()).sorted()
         self.recentSessions = (try? container.usageRepo.getRecentSessions(limit: 15)) ?? []
+        refreshRunningApplications()
     }
 
     private var trackingTask: Task<Void, Never>?
@@ -306,6 +365,13 @@ public final class AppState: ObservableObject {
                 if self.isEmergencyLocked {
                     if !self.currentForegroundBundleId.isEmpty && self.trackedTargets.contains(self.currentForegroundBundleId) {
                         self.container.applicationControl.terminateApplication(bundleIdentifier: self.currentForegroundBundleId)
+                    }
+                }
+                if self.isFocusActive && self.focusRemainingSeconds > 0 {
+                    self.focusRemainingSeconds -= 1
+                    if self.focusRemainingSeconds <= 0 {
+                        self.isFocusActive = false
+                        self.statusMessage = "Focus Mode Ended • Normal Browsing Restored"
                     }
                 }
                 self.trackingTickCount += 1
@@ -419,6 +485,125 @@ public final class AppState: ObservableObject {
         container.usageService.removeTrackedTarget(bundleId)
         self.statusMessage = "Stopped tracking: \(bundleId)"
         refreshState()
+    }
+
+    // MARK: - Running Applications Discovery
+    public func refreshRunningApplications() {
+        let running = NSWorkspace.shared.runningApplications
+        var list: [DiscoveredApp] = []
+        let currentBundle = Bundle.main.bundleIdentifier ?? "com.focusguard.macos"
+
+        for app in running {
+            guard app.activationPolicy == .regular,
+                  let bundleId = app.bundleIdentifier,
+                  bundleId != currentBundle,
+                  !bundleId.isEmpty else {
+                continue
+            }
+            let name = app.localizedName ?? bundleId
+            let isTracked = trackedTargets.contains(bundleId)
+            let isProtected = ProtectedAppDenylist.isProtected(bundleIdentifier: bundleId)
+            list.append(DiscoveredApp(name: name, bundleIdentifier: bundleId, isTracked: isTracked, isProtected: isProtected))
+        }
+
+        self.runningApplicationsList = list.sorted { a, b in
+            if a.isTracked != b.isTracked { return a.isTracked && !b.isTracked }
+            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }
+    }
+
+    // MARK: - Focus Session API
+    public func startFocusLockdown(minutes: Int) async {
+        guard let token = (try? container.deviceService.getDeviceToken()) ?? cachedUserToken else {
+            self.statusMessage = "Cannot start focus: Please pair device first"
+            return
+        }
+
+        guard let url = URL(string: "\(serverBaseUrl)/api/v1/focus/start") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "durationMinutes": minutes,
+            "reason": "macOS Native Deep Work Lockdown"
+        ])
+
+        do {
+            let (_, res) = try await URLSession.shared.data(for: req)
+            if let http = res as? HTTPURLResponse, http.statusCode == 200 || http.statusCode == 201 {
+                await MainActor.run {
+                    self.isFocusActive = true
+                    self.focusRemainingSeconds = minutes * 60
+                    self.statusMessage = "⚡ Focus Lockdown active: \(minutes)m"
+                    if self.soundAlertsEnabled {
+                        NSSound.beep()
+                    }
+                }
+            } else {
+                await MainActor.run { self.statusMessage = "Failed to start focus session" }
+            }
+        } catch {
+            await MainActor.run { self.statusMessage = "Network error starting focus: \(error.localizedDescription)" }
+        }
+    }
+
+    public func endFocusLockdown() async {
+        guard let token = (try? container.deviceService.getDeviceToken()) ?? cachedUserToken else { return }
+        guard let url = URL(string: "\(serverBaseUrl)/api/v1/focus/end") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        do {
+            let (_, res) = try await URLSession.shared.data(for: req)
+            if let http = res as? HTTPURLResponse, http.statusCode == 200 {
+                await MainActor.run {
+                    self.isFocusActive = false
+                    self.focusRemainingSeconds = 0
+                    self.statusMessage = "Focus Mode Released • Normal Browsing Restored"
+                }
+            }
+        } catch {
+            await MainActor.run { self.statusMessage = "Error ending focus: \(error.localizedDescription)" }
+        }
+    }
+
+    public func checkActiveFocusSession() async {
+        guard let token = (try? container.deviceService.getDeviceToken()) ?? cachedUserToken else { return }
+        guard let url = URL(string: "\(serverBaseUrl)/api/v1/focus/active") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        do {
+            let (data, res) = try await URLSession.shared.data(for: req)
+            if let http = res as? HTTPURLResponse, http.statusCode == 200,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let active = json["active"] as? Bool {
+                await MainActor.run {
+                    self.isFocusActive = active
+                    if active, let session = json["session"] as? [String: Any],
+                       let remaining = session["remainingSeconds"] as? Int {
+                        self.focusRemainingSeconds = remaining
+                    } else if !active {
+                        self.focusRemainingSeconds = 0
+                    }
+                }
+            }
+        } catch {}
+    }
+
+    // MARK: - Preferences & Settings
+    public func updateSettings(url: String, idleSeconds: Int, soundAlerts: Bool) {
+        self.serverBaseUrl = url
+        self.idleThresholdSeconds = idleSeconds
+        self.soundAlertsEnabled = soundAlerts
+        UserDefaults.standard.set(url, forKey: "fg_server_url")
+        UserDefaults.standard.set(idleSeconds, forKey: "fg_idle_threshold")
+        UserDefaults.standard.set(soundAlerts, forKey: "fg_sound_alerts")
+        self.statusMessage = "Preferences updated successfully."
     }
 
     public func savePolicy(name: String, limitMinutes: Int, warningMinutes: Int, targetBundle: String, action: EnforcementAction) {

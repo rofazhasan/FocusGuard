@@ -1,4 +1,5 @@
 import SwiftUI
+import Charts
 import FocusGuardCore
 
 public struct UsageView: View {
@@ -63,6 +64,54 @@ public struct UsageView: View {
                         subtitle: "Active native window"
                     )
                 }
+
+                // Swift Charts: Category Attention Breakdown
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Attention Breakdown by Category")
+                                .font(.system(size: 16, weight: .bold, design: .rounded))
+                            Text("Real-time aggregated distribution across productive work, learning, and distraction")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                    }
+
+                    if appState.categoryUsageBreakdown.isEmpty {
+                        HStack(spacing: 8) {
+                            Image(systemName: "chart.bar.xaxis")
+                                .font(.system(size: 22))
+                                .foregroundColor(.secondary)
+                            Text("No category telemetry accumulated yet today. Attention data populates as websites and apps are active.")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.vertical, 16)
+                    } else {
+                        Chart(appState.categoryUsageBreakdown) { item in
+                            BarMark(
+                                x: .value("Minutes", item.totalMinutes),
+                                y: .value("Category", item.category)
+                            )
+                            .foregroundStyle(item.isDistraction ? Color.red.gradient : Color.accentColor.gradient)
+                            .cornerRadius(4)
+                            .annotation(position: .trailing) {
+                                Text(String(format: "%.1fm", item.totalMinutes))
+                                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                                    .padding(.leading, 4)
+                            }
+                        }
+                        .frame(height: max(130, CGFloat(appState.categoryUsageBreakdown.count * 38)))
+                        .chartXAxis {
+                            AxisMarks(position: .bottom)
+                        }
+                    }
+                }
+                .padding(16)
+                .background(Color.secondary.opacity(0.04))
+                .cornerRadius(12)
 
                 // Websites Breakdown Card
                 VStack(alignment: .leading, spacing: 14) {

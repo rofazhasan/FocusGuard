@@ -36,5 +36,11 @@ struct FocusGuardApp: App {
                 .environmentObject(appState)
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView()
+                .environmentObject(appState)
+                .frame(width: 520, height: 420)
+        }
     }
 }
