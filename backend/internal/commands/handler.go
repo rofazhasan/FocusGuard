@@ -72,13 +72,40 @@ func (h *Handler) DispatchCommand(w http.ResponseWriter, r *http.Request) {
 	payloadStr := string(payloadBytes)
 
 	if h.db != nil {
-		q := `INSERT INTO remote_commands (id, device_id, issued_by, command_type, payload, issued_at, expires_at, status)
-		      VALUES ($1, $2, $3, $4, $5, $6, $7, 'DISPATCHED')`
-		_, err := h.db.ExecContext(r.Context(), q, commandID, req.DeviceID, claims.UserID.String(), req.CommandType, payloadStr, now, expiresAt)
-		if err != nil {
-			logger.Error("Failed to persist remote command", "error", err)
-			http.Error(w, `{"error":"Database error dispatching command"}`, http.StatusInternalServerError)
-			return
+		targetDevices := []string{req.DeviceID}
+		if req.DeviceID == "ALL" {
+			targetDevices = []string{}
+			rows, err := h.db.QueryContext(r.Context(), `SELECT id FROM devices WHERE user_id = $1 AND status != 'REVOKED'`, claims.UserID.String())
+			if err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var devID string
+					if err := rows.Scan(&devID); err == nil {
+						targetDevices = append(targetDevices, devID)
+					}
+				}
+			}
+		}
+
+		for _, dID := range targetDevices {
+			q := `INSERT INTO remote_commands (id, device_id, issued_by, command_type, payload, issued_at, expires_at, status)
+			      VALUES ($1, $2, $3, $4, $5, $6, $7, 'DISPATCHED')`
+			_, _ = h.db.ExecContext(r.Context(), q, uuid.New().String(), dID, claims.UserID.String(), req.CommandType, payloadStr, now, expiresAt)
+		}
+
+		// Update device protection state according to command
+		if req.CommandType == "STOP_APP" || req.CommandType == "LOCKDOWN_DEVICE" {
+			if req.DeviceID == "ALL" {
+				_, _ = h.db.ExecContext(r.Context(), `UPDATE devices SET protection_state = 'LOCKED' WHERE user_id = $1`, claims.UserID.String())
+			} else {
+				_, _ = h.db.ExecContext(r.Context(), `UPDATE devices SET protection_state = 'LOCKED' WHERE id = $1 AND user_id = $2`, req.DeviceID, claims.UserID.String())
+			}
+		} else if req.CommandType == "RESUME_APP" || req.CommandType == "UNLOCK_DEVICE" {
+			if req.DeviceID == "ALL" {
+				_, _ = h.db.ExecContext(r.Context(), `UPDATE devices SET protection_state = 'PROTECTED' WHERE user_id = $1`, claims.UserID.String())
+			} else {
+				_, _ = h.db.ExecContext(r.Context(), `UPDATE devices SET protection_state = 'PROTECTED' WHERE id = $1 AND user_id = $2`, req.DeviceID, claims.UserID.String())
+			}
 		}
 
 		// Record in audit log
@@ -87,7 +114,7 @@ func (h *Handler) DispatchCommand(w http.ResponseWriter, r *http.Request) {
 		_, _ = h.db.ExecContext(r.Context(), auditQ, uuid.New().String(), claims.UserID.String(), req.DeviceID, req.CommandType)
 	}
 
-	// Broadcast command over WebSocket to target device
+	// Broadcast command over WebSocket to target devices in real-time
 	if h.wsHub != nil {
 		h.wsHub.BroadcastToUser(claims.UserID, events.EventMessage{
 			Event: "REMOTE_COMMAND",

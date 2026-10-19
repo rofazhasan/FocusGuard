@@ -41,6 +41,30 @@ public struct DashboardView: View {
                     }
                 }
 
+                if appState.isEmergencyLocked {
+                    HStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.octagon.fill")
+                            .font(.system(size: 26))
+                            .foregroundColor(.red)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("ADMIN EMERGENCY STOP ACTIVE")
+                                .font(.system(size: 13, weight: .heavy))
+                                .foregroundColor(.red)
+                            Text("This device was remotely stopped by your administrator. Protected applications and distracting sites are locked down.")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(14)
+                    .background(Color.red.opacity(0.12))
+                    .cornerRadius(10)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.red.opacity(0.3), lineWidth: 1)
+                    )
+                }
+
                 // Telemetry Cards
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
                     // Current Foreground

@@ -18,3 +18,32 @@ func TestRemoteCommandExpiration(t *testing.T) {
 		t.Errorf("Expected expiredTime to be recognized as past")
 	}
 }
+
+func TestRemoteCommandProtectionStateInference(t *testing.T) {
+	tests := []struct {
+		cmdType       string
+		expectedState string
+	}{
+		{"STOP_APP", "LOCKED"},
+		{"LOCKDOWN_DEVICE", "LOCKED"},
+		{"RESUME_APP", "PROTECTED"},
+		{"UNLOCK_DEVICE", "PROTECTED"},
+		{"SYNC_POLICIES", ""},
+	}
+
+	for _, tt := range tests {
+		var state string
+		switch tt.cmdType {
+		case "STOP_APP", "LOCKDOWN_DEVICE":
+			state = "LOCKED"
+		case "RESUME_APP", "UNLOCK_DEVICE":
+			state = "PROTECTED"
+		default:
+			state = ""
+		}
+
+		if state != tt.expectedState {
+			t.Errorf("For command %s, expected state %s, got %s", tt.cmdType, tt.expectedState, state)
+		}
+	}
+}

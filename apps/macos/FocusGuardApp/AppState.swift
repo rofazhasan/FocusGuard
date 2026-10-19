@@ -30,6 +30,7 @@ public final class AppState: ObservableObject {
     @Published public var isFocusActive: Bool = false
     @Published public var focusRemainingSeconds: Int = 0
     @Published public var activeBlockedTargets: [String] = []
+    @Published public var isEmergencyLocked: Bool = false
 
     public struct WebsiteUsageItem: Identifiable, Codable {
         public var id: String { domain }
@@ -117,6 +118,29 @@ public final class AppState: ObservableObject {
                     )
                 } else {
                     self.statusMessage = "Focus Mode Ended • Normal Browsing Restored"
+                }
+            }
+        }
+
+        container.realtimeService.onLockdownChanged = { [weak self] isLocked, command in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                self.isEmergencyLocked = isLocked
+                if isLocked {
+                    self.statusMessage = "🛑 EMERGENCY STOP: App locked down by administrator"
+                    self.container.notificationAdapter.notifyLimitReached(
+                        appName: "FocusGuard Administrator",
+                        bundleIdentifier: "admin.remote.stop"
+                    )
+                    // Terminate all tracked target applications immediately
+                    for target in self.trackedTargets {
+                        self.container.applicationControl.terminateApplication(bundleIdentifier: target)
+                    }
+                    if !self.currentForegroundBundleId.isEmpty && self.trackedTargets.contains(self.currentForegroundBundleId) {
+                        self.container.applicationControl.terminateApplication(bundleIdentifier: self.currentForegroundBundleId)
+                    }
+                } else {
+                    self.statusMessage = "🔓 Protection Resumed: Applications unlocked by administrator"
                 }
             }
         }
@@ -274,6 +298,11 @@ public final class AppState: ObservableObject {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard let self = self, !Task.isCancelled else { break }
                 _ = try? self.container.usageService.tick(deltaSeconds: 1)
+                if self.isEmergencyLocked {
+                    if !self.currentForegroundBundleId.isEmpty && self.trackedTargets.contains(self.currentForegroundBundleId) {
+                        self.container.applicationControl.terminateApplication(bundleIdentifier: self.currentForegroundBundleId)
+                    }
+                }
                 self.trackingTickCount += 1
                 if self.trackingTickCount % 3 == 0 {
                     self.fetchWebsiteAnalytics()

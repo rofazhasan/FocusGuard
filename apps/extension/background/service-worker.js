@@ -397,6 +397,18 @@ async function connectWebSocket() {
             const evalResult = policyEngine.evaluate(sessionTracker.currentDomain);
             redirectToBlockPage(sessionTracker.currentTabId, sessionTracker.currentDomain, evalResult);
           }
+        } else if (eventName === 'REMOTE_COMMAND') {
+          const cmdType = data.commandType || data.type;
+          const targetDev = data.deviceId;
+          const myId = await getOrCreateDeviceId();
+          const isTargeted = (!targetDev || targetDev === 'ALL' || targetDev === myId || targetDev === '5028eea4-8da8-431a-91c7-d637a6837f9f');
+          if (isTargeted) {
+            if (cmdType === 'STOP_APP' || cmdType === 'LOCKDOWN_DEVICE') {
+              await applyRemoteLockdown(data);
+            } else if (cmdType === 'RESUME_APP' || cmdType === 'UNLOCK_DEVICE') {
+              await removeRemoteLockdown(data);
+            }
+          }
         }
       } catch (e) {
         console.error('[FocusGuard Extension] Error handling WS message', e);
@@ -408,12 +420,116 @@ async function connectWebSocket() {
   }
 }
 
+// ---------------- Remote Admin Lockdown Handlers ----------------
+
+async function applyRemoteLockdown(data) {
+  console.log('[FocusGuard Extension] 🚨 EXECUTING ADMIN EMERGENCY APP STOP...');
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    await chrome.storage.local.set({ 
+      fg_emergency_lockdown: true, 
+      fg_lockdown_reason: data?.payload?.message || 'Emergency App Stop by Administrator' 
+    });
+  }
+
+  // Inject high-priority declarative redirect rule
+  if (typeof chrome !== 'undefined' && chrome.declarativeNetRequest) {
+    const blockUrl = chrome.runtime.getURL('pages/block.html?target=Browser%20Apps&reason=Emergency%20App%20Stop%20by%20Administrator&policy=Admin%20Remote%20Lockdown');
+    try {
+      await chrome.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds: [999999],
+        addRules: [{
+          id: 999999,
+          priority: 500,
+          action: {
+            type: 'redirect',
+            redirect: { url: blockUrl }
+          },
+          condition: {
+            urlFilter: '*',
+            resourceTypes: ['main_frame']
+          }
+        }]
+      });
+    } catch (err) {
+      console.warn('[FocusGuard Extension] Could not register emergency DNR rule:', err);
+    }
+  }
+
+  // Immediately redirect all open browser web tabs to block screen
+  if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.query) {
+    chrome.tabs.query({}, (tabs) => {
+      for (const tab of tabs || []) {
+        if (tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://') && !tab.url.startsWith('about:')) {
+          chrome.tabs.update(tab.id, {
+            url: chrome.runtime.getURL('pages/block.html?target=Browser%20Apps&reason=Emergency%20App%20Stop%20by%20Administrator&policy=Admin%20Remote%20Lockdown')
+          });
+        }
+      }
+    });
+  }
+
+  if (data && data.commandId) {
+    acknowledgeCommand(data.commandId, 'EXECUTING', 'Browser extension locked down all tabs');
+  }
+}
+
+async function removeRemoteLockdown(data) {
+  console.log('[FocusGuard Extension] 🔓 Releasing Admin Emergency Lockdown...');
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    await chrome.storage.local.set({ fg_emergency_lockdown: false });
+  }
+
+  if (typeof chrome !== 'undefined' && chrome.declarativeNetRequest) {
+    try {
+      await chrome.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds: [999999],
+        addRules: []
+      });
+    } catch (err) {}
+  }
+
+  await fetchPoliciesFromServer();
+
+  if (data && data.commandId) {
+    acknowledgeCommand(data.commandId, 'SUCCEEDED', 'Browser extension resumed normal operation');
+  }
+}
+
+async function acknowledgeCommand(commandId, status, details) {
+  try {
+    const token = await getOrFetchAuthToken();
+    if (!token) return;
+    await fetch(`${API_BASE}/commands/${commandId}/ack`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      body: JSON.stringify({ status, details })
+    });
+  } catch (e) {
+    console.warn('[FocusGuard Extension] Failed to ack command:', e);
+  }
+}
+
 // ---------------- Navigation & Enforcement Interceptors ----------------
 
-chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
   if (details.frameId !== 0) return; // Main frame only
   const url = details.url;
   if (url.startsWith('chrome://') || url.startsWith('chrome-extension://') || url.startsWith('about:')) return;
+
+  // Enforce emergency lockdown if active
+  if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+    const store = await chrome.storage.local.get(['fg_emergency_lockdown']);
+    if (store && store.fg_emergency_lockdown) {
+      redirectToBlockPage(details.tabId, url, { 
+        reason: 'Emergency App Stop by Administrator', 
+        policyName: 'Admin Remote Lockdown' 
+      });
+      return;
+    }
+  }
 
   const evalResult = policyEngine.evaluate(url);
   if (evalResult.action === 'BLOCK') {

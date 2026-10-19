@@ -178,6 +178,15 @@ function handleIncomingEvent(msg) {
       showToast(`⚠️ Tamper Warning: ${msg.payload?.warning || "Protection state degraded"}`, "alert");
       break;
 
+    case "REMOTE_COMMAND":
+      fetchDevices();
+      if (msg.protectionState === "LOCKED" || msg.commandType === "STOP_APP" || msg.commandType === "LOCKDOWN_DEVICE") {
+        showToast(`🛑 Remote Lockdown: ${msg.deviceId === 'ALL' ? 'All fleet devices' : 'Device'} stopped by admin!`, "alert");
+      } else if (msg.protectionState === "PROTECTED" || msg.commandType === "RESUME_APP" || msg.commandType === "UNLOCK_DEVICE") {
+        showToast(`🔓 Protection Resumed: ${msg.deviceId === 'ALL' ? 'All fleet devices' : 'Device'} unlocked by admin!`, "success");
+      }
+      break;
+
     default:
       break;
   }
@@ -605,12 +614,13 @@ function renderDevicesGrid() {
   container.innerHTML = list.map(dev => {
     const isOnline = dev.status === "ACTIVE" || dev.status === "ONLINE";
     const isExtension = dev.platform === "WEB_EXTENSION" || dev.osVersion?.includes("Extension");
+    const isLocked = dev.protectionState === "LOCKED";
 
     return `
-      <div class="device-card">
+      <div class="device-card" style="${isLocked ? 'border-color: rgba(239, 68, 68, 0.4); background: rgba(239, 68, 68, 0.04);' : ''}">
         <div class="device-card-header">
           <div class="device-title-row">
-            <div class="device-icon-box">
+            <div class="device-icon-box" style="${isLocked ? 'background: rgba(239, 68, 68, 0.15); color: #f87171;' : ''}">
               ${isExtension 
                 ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>`
                 : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>`
@@ -621,17 +631,33 @@ function renderDevicesGrid() {
               <div class="device-platform">${escapeHtml(dev.platform)} • ${escapeHtml(dev.osVersion || "v1.0")}</div>
             </div>
           </div>
-          <span class="kpi-badge ${isOnline ? 'badge-green' : 'badge-yellow'}">${isOnline ? 'ONLINE' : 'SYNCING'}</span>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            ${isLocked 
+              ? `<span class="kpi-badge badge-red">STOPPED</span>` 
+              : `<span class="kpi-badge ${isOnline ? 'badge-green' : 'badge-yellow'}">${isOnline ? 'ONLINE' : 'SYNCING'}</span>`
+            }
+          </div>
         </div>
 
         <div class="device-keys-box">
           Device ID: ${dev.id}<br>
-          Policy Sync: Verified & Enforced
+          Protection State: <strong style="color: ${isLocked ? '#f87171' : 'var(--accent-emerald)'}">${dev.protectionState || 'PROTECTED'}</strong>
         </div>
 
         <div class="device-footer">
           <span>Last Heartbeat: Live</span>
-          <span style="color: var(--accent-emerald);">● Synchronized</span>
+          <div style="display: flex; gap: 6px; align-items: center;">
+            ${isLocked 
+              ? `<button class="btn btn-outline-success btn-xs" onclick="window.dispatchDeviceCommand('${dev.id}', 'RESUME_APP')">
+                  <svg style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                  Resume App
+                </button>`
+              : `<button class="btn btn-danger btn-xs" onclick="window.dispatchDeviceCommand('${dev.id}', 'STOP_APP')">
+                  <svg style="width:12px;height:12px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+                  Stop App
+                </button>`
+            }
+          </div>
         </div>
       </div>
     `;
@@ -1000,3 +1026,52 @@ function escapeHtml(text) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 }
+
+// ============================================================================
+// REMOTE DEVICE COMMAND DISPATCH (ADMIN LOCKDOWN & RESUME)
+// ============================================================================
+window.dispatchDeviceCommand = async function(deviceId, commandType) {
+  if (!state.token) return;
+  try {
+    const isLock = commandType === "STOP_APP" || commandType === "LOCKDOWN_DEVICE";
+    const actionText = isLock ? "Dispatching remote app shutdown..." : "Dispatching resume command...";
+    showToast(actionText, "info");
+
+    const res = await fetch(`${API_BASE}/commands/dispatch`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${state.token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        deviceId: deviceId,
+        commandType: commandType,
+        payload: {
+          reason: isLock ? "Admin Emergency Stop" : "Admin Protection Resumed",
+          initiatedBy: "admin_web_dashboard"
+        }
+      })
+    });
+
+    if (res.ok) {
+      showToast(isLock ? "🛑 Device stopped and locked down successfully!" : "🔓 Device protection resumed!", "success");
+      await fetchDevices();
+    } else {
+      const err = await res.json().catch(() => ({}));
+      showToast(err.error || "Failed to dispatch command", "alert");
+    }
+  } catch (err) {
+    showToast("Network error dispatching command", "alert");
+  }
+};
+
+window.emergencyStopAllDevices = async function() {
+  if (!confirm("🚨 Are you sure you want to trigger an EMERGENCY STOP on ALL paired devices? All target applications and distracting websites will be halted immediately.")) {
+    return;
+  }
+  await window.dispatchDeviceCommand("ALL", "STOP_APP");
+};
+
+window.resumeAllDevices = async function() {
+  await window.dispatchDeviceCommand("ALL", "RESUME_APP");
+};

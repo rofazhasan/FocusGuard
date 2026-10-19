@@ -13,6 +13,7 @@ public protocol RealtimeServiceProtocol: AnyObject, Sendable {
     var onRevocationReceived: (@Sendable () -> Void)? { get set }
     var onFocusChanged: (@Sendable (Bool, Int, [String]) -> Void)? { get set }
     var onPolicyUpdated: (@Sendable () -> Void)? { get set }
+    var onLockdownChanged: (@Sendable (Bool, String) -> Void)? { get set }
     func connect()
     func disconnect()
     func sendHeartbeat()
@@ -34,6 +35,7 @@ public final class RealtimeService: RealtimeServiceProtocol, @unchecked Sendable
     public var onRevocationReceived: (@Sendable () -> Void)?
     public var onFocusChanged: (@Sendable (Bool, Int, [String]) -> Void)?
     public var onPolicyUpdated: (@Sendable () -> Void)?
+    public var onLockdownChanged: (@Sendable (Bool, String) -> Void)?
 
     public var connectionState: RealtimeConnectionState {
         lock.lock()
@@ -190,6 +192,22 @@ public final class RealtimeService: RealtimeServiceProtocol, @unchecked Sendable
         case "FOCUS_ENDED", "FOCUS_SESSION_ENDED":
             onFocusChanged?(false, 0, [])
 
+        case "REMOTE_COMMAND":
+            let payload = json["payload"] as? [String: Any] ?? [:]
+            let commandType = (json["commandType"] as? String) ?? (payload["commandType"] as? String) ?? ""
+            let targetDeviceId = (json["deviceId"] as? String) ?? (payload["deviceId"] as? String) ?? "ALL"
+            let protectionState = (json["protectionState"] as? String) ?? ""
+
+            let currentDeviceId = (try? deviceService.getDeviceIdentity())?.deviceId?.uuidString ?? ""
+            let isTargeted = targetDeviceId == "ALL" || targetDeviceId.isEmpty || (
+                !currentDeviceId.isEmpty && targetDeviceId.caseInsensitiveCompare(currentDeviceId) == .orderedSame
+            )
+
+            if isTargeted {
+                let isLockdown = commandType == "STOP_APP" || commandType == "LOCKDOWN_DEVICE" || protectionState == "LOCKED"
+                onLockdownChanged?(isLockdown, commandType)
+            }
+
         default:
             break
         }
@@ -256,6 +274,7 @@ public final class MockRealtimeService: RealtimeServiceProtocol, @unchecked Send
     public var onRevocationReceived: (@Sendable () -> Void)?
     public var onFocusChanged: (@Sendable (Bool, Int, [String]) -> Void)?
     public var onPolicyUpdated: (@Sendable () -> Void)?
+    public var onLockdownChanged: (@Sendable (Bool, String) -> Void)?
 
     public var connectionState: RealtimeConnectionState {
         lock.lock()

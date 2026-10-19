@@ -35,7 +35,24 @@ public struct MainAppView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 14)
 
-                if appState.isFocusActive {
+                if appState.isEmergencyLocked {
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 8, height: 8)
+                        Text("REMOTE STOP ACTIVE")
+                            .font(.system(size: 10, weight: .heavy))
+                            .foregroundColor(.red)
+                        Spacer()
+                        Image(systemName: "lock.shield.fill")
+                            .foregroundColor(.red)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.red.opacity(0.15))
+                    .cornerRadius(8)
+                    .padding(.horizontal, 12)
+                } else if appState.isFocusActive {
                     HStack(spacing: 8) {
                         Circle()
                             .fill(Color.orange)
