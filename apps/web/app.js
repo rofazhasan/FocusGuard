@@ -9,6 +9,7 @@ const WS_BASE = "ws://localhost:8080/ws";
 // Core Reactive State
 const state = {
   token: localStorage.getItem("focusguard_token") || null,
+  refreshToken: localStorage.getItem("focusguard_refresh_token") || null,
   user: null,
   
   // Real-time Focus Session
@@ -40,6 +41,122 @@ const state = {
 };
 
 // ============================================================================
+// TOKEN MANAGEMENT & AUTHENTICATION
+// ============================================================================
+function isTokenExpired(token) {
+  if (!token || typeof token !== "string") return true;
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return true;
+    const payload = JSON.parse(atob(parts[1]));
+    if (!payload.exp) return false;
+    // Expired or expiring within the next 45 seconds
+    return Date.now() >= (payload.exp * 1000 - 45000);
+  } catch (e) {
+    return true;
+  }
+}
+
+async function ensureAuthentication(force = false) {
+  if (!force && state.token && !isTokenExpired(state.token)) {
+    return state.token;
+  }
+
+  // Attempt refresh token exchange if available and not explicitly forced
+  if (!force && state.refreshToken) {
+    try {
+      const res = await fetch(`${API_BASE}/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refreshToken: state.refreshToken })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        state.token = data.accessToken;
+        state.refreshToken = data.refreshToken;
+        localStorage.setItem("focusguard_token", state.token);
+        localStorage.setItem("focusguard_refresh_token", state.refreshToken);
+        console.log("[FocusGuard Auth] Access token successfully refreshed.");
+        return state.token;
+      }
+    } catch (e) {
+      console.warn("[FocusGuard Auth] Refresh attempt failed, falling back to login.");
+    }
+  }
+
+  // Clear stale credentials from storage
+  state.token = null;
+  state.refreshToken = null;
+  localStorage.removeItem("focusguard_token");
+  localStorage.removeItem("focusguard_refresh_token");
+
+  try {
+    const res = await fetch(`${API_BASE}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: "demo@focusguard.local", password: "focusguard123" })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      state.token = data.accessToken;
+      state.refreshToken = data.refreshToken;
+      state.user = data.user;
+      localStorage.setItem("focusguard_token", state.token);
+      if (data.refreshToken) {
+        localStorage.setItem("focusguard_refresh_token", data.refreshToken);
+      }
+      if (data.user?.email) {
+        const emailEl = document.getElementById("user-display-email");
+        if (emailEl) emailEl.innerText = data.user.email;
+      }
+      console.log("[FocusGuard Auth] Authenticated successfully with backend.");
+      return state.token;
+    }
+  } catch (err) {
+    console.warn("[FocusGuard] Auth failed, running in guest mode", err);
+  }
+  return null;
+}
+
+/**
+ * Enterprise Centralized API Fetcher with automatic token refresh and 401 retry
+ */
+async function apiFetch(endpoint, options = {}) {
+  if (isTokenExpired(state.token)) {
+    await ensureAuthentication();
+  }
+
+  const url = endpoint.startsWith("http") ? endpoint : `${API_BASE}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
+  const headers = { ...(options.headers || {}) };
+  if (state.token && !headers["Authorization"]) {
+    headers["Authorization"] = `Bearer ${state.token}`;
+  }
+
+  let res;
+  try {
+    res = await fetch(url, { ...options, headers });
+  } catch (netErr) {
+    throw netErr;
+  }
+
+  // Intercept 401 Unauthorized: token expired or invalidated server-side
+  if (res.status === 401) {
+    console.warn(`[FocusGuard API] Received 401 Unauthorized on ${endpoint}. Auto-renewing session...`);
+    const newToken = await ensureAuthentication(true);
+    if (newToken) {
+      headers["Authorization"] = `Bearer ${newToken}`;
+      res = await fetch(url, { ...options, headers });
+      if (!state.wsConnected) {
+        setupWebSocket();
+      }
+    }
+  }
+
+  return res;
+}
+
+// ============================================================================
 // INITIALIZATION
 // ============================================================================
 document.addEventListener("DOMContentLoaded", async () => {
@@ -53,44 +170,26 @@ document.addEventListener("DOMContentLoaded", async () => {
   }, 4000);
 });
 
-async function ensureAuthentication() {
-  if (state.token) {
-    return;
-  }
-
-  try {
-    const res = await fetch(`${API_BASE}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: "demo@focusguard.local", password: "focusguard123" })
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      state.token = data.accessToken;
-      state.user = data.user;
-      localStorage.setItem("focusguard_token", state.token);
-      if (data.user?.email) {
-        document.getElementById("user-display-email").innerText = data.user.email;
-      }
-    }
-  } catch (err) {
-    console.warn("[FocusGuard] Auth failed, running in guest mode", err);
-  }
-}
-
 // ============================================================================
 // WEBSOCKET REAL-TIME HUB
 // ============================================================================
-function setupWebSocket() {
+async function setupWebSocket() {
   if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
     return;
+  }
+
+  // Ensure fresh token before connecting
+  if (isTokenExpired(state.token)) {
+    await ensureAuthentication();
   }
 
   const tokenParam = state.token ? `?token=${encodeURIComponent(state.token)}` : "";
   const wsUrl = `${WS_BASE}${tokenParam}`;
 
   try {
+    if (state.ws) {
+      try { state.ws.close(); } catch (e) {}
+    }
     state.ws = new WebSocket(wsUrl);
 
     state.ws.onopen = () => {
@@ -112,7 +211,11 @@ function setupWebSocket() {
     state.ws.onclose = () => {
       state.wsConnected = false;
       updateSyncStatusUI(false);
-      scheduleWsReconnect();
+      if (isTokenExpired(state.token)) {
+        ensureAuthentication(true).then(() => scheduleWsReconnect());
+      } else {
+        scheduleWsReconnect();
+      }
     };
 
     state.ws.onerror = () => {
@@ -248,12 +351,9 @@ window.handleFocusButtonClick = async function() {
 
 async function startFocusLockdown(mins) {
   try {
-    const res = await fetch(`${API_BASE}/focus/start`, {
+    const res = await apiFetch("/focus/start", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${state.token}`
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         durationMinutes: mins,
         reason: "Deep Work Attention Session"
@@ -275,12 +375,9 @@ async function startFocusLockdown(mins) {
 
 window.endFocusLockdown = async function() {
   try {
-    const res = await fetch(`${API_BASE}/focus/end`, {
+    const res = await apiFetch("/focus/end", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${state.token}`
-      }
+      headers: { "Content-Type": "application/json" }
     });
 
     if (res.ok) {
@@ -294,9 +391,7 @@ window.endFocusLockdown = async function() {
 
 async function checkActiveFocus() {
   try {
-    const res = await fetch(`${API_BASE}/focus/active`, {
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
+    const res = await apiFetch("/focus/active");
     if (res.ok) {
       const data = await res.json();
       if (data.active && data.session) {
@@ -378,11 +473,8 @@ function updateTimerDigits(totalSeconds) {
 // WEBSITE ATTENTION ANALYTICS TABLE
 // ============================================================================
 async function fetchWebsitesAnalytics(silent = false) {
-  if (!state.token) return;
   try {
-    const res = await fetch(`${API_BASE}/analytics/websites`, {
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
+    const res = await apiFetch("/analytics/websites");
     if (res.ok) {
       state.websiteAnalytics = await res.json();
       renderWebsitesTable();
@@ -536,11 +628,8 @@ window.handleWebsiteSearch = function(val) {
 // DAILY KPI & ATTENTION SCORE
 // ============================================================================
 async function fetchDailyAnalytics(silent = false) {
-  if (!state.token) return;
   try {
-    const res = await fetch(`${API_BASE}/analytics/daily`, {
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
+    const res = await apiFetch("/analytics/daily");
     if (res.ok) {
       state.dailyAnalytics = await res.json();
       renderKPICards();
@@ -584,11 +673,8 @@ function renderKPICards() {
 // DEVICES FLEET VIEW
 // ============================================================================
 async function fetchDevices() {
-  if (!state.token) return;
   try {
-    const res = await fetch(`${API_BASE}/devices`, {
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
+    const res = await apiFetch("/devices");
     if (res.ok) {
       state.devices = await res.json();
       renderDevicesGrid();
@@ -668,11 +754,8 @@ function renderDevicesGrid() {
 // POLICIES VIEW
 // ============================================================================
 async function fetchPolicies() {
-  if (!state.token) return;
   try {
-    const res = await fetch(`${API_BASE}/policies`, {
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
+    const res = await apiFetch("/policies");
     if (res.ok) {
       state.policies = await res.json();
       renderPoliciesList();
@@ -727,9 +810,8 @@ function renderPoliciesList() {
 
 window.togglePolicy = async function(id) {
   try {
-    const res = await fetch(`${API_BASE}/policies/${id}/toggle`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${state.token}` }
+    const res = await apiFetch(`/policies/${id}/toggle`, {
+      method: "POST"
     });
     if (res.ok) {
       fetchPolicies();
@@ -742,9 +824,8 @@ window.togglePolicy = async function(id) {
 window.deletePolicy = async function(id) {
   if (!confirm("Are you sure you want to remove this attention policy?")) return;
   try {
-    const res = await fetch(`${API_BASE}/policies/${id}`, {
-      method: "DELETE",
-      headers: { "Authorization": `Bearer ${state.token}` }
+    const res = await apiFetch(`/policies/${id}`, {
+      method: "DELETE"
     });
     if (res.ok) {
       fetchPolicies();
@@ -762,12 +843,9 @@ window.inspectDomainPolicy = async function() {
   if (!domain) return;
 
   try {
-    const res = await fetch(`${API_BASE}/policies/explain`, {
+    const res = await apiFetch("/policies/explain", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${state.token}`
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ target: domain })
     });
 
@@ -809,12 +887,9 @@ window.quickAddDomainRule = async function(minutes) {
 
   const name = minutes === 0 ? `Block ${domain}` : `${domain} (${minutes}m Cap)`;
   try {
-    const res = await fetch(`${API_BASE}/policies`, {
+    const res = await apiFetch("/policies", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${state.token}`
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: name,
         limitSeconds: minutes * 60,
@@ -839,11 +914,8 @@ window.quickAddDomainRule = async function(minutes) {
 // AUDIT LOG
 // ============================================================================
 async function fetchAuditLogs() {
-  if (!state.token) return;
   try {
-    const res = await fetch(`${API_BASE}/audit/logs`, {
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
+    const res = await apiFetch("/audit/logs");
     if (res.ok) {
       state.auditLogs = await res.json();
       renderAuditLogs();
@@ -890,9 +962,8 @@ window.closePairingModal = function() {
 
 window.generateNewPairingCode = async function() {
   try {
-    const res = await fetch(`${API_BASE}/pairing/start`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${state.token}` }
+    const res = await apiFetch("/pairing/start", {
+      method: "POST"
     });
 
     if (res.ok) {
@@ -945,12 +1016,9 @@ window.submitCreatePolicy = async function() {
   }
 
   try {
-    const res = await fetch(`${API_BASE}/policies`, {
+    const res = await apiFetch("/policies", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${state.token}`
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: name,
         limitSeconds: mins * 60,
@@ -1031,18 +1099,14 @@ function escapeHtml(text) {
 // REMOTE DEVICE COMMAND DISPATCH (ADMIN LOCKDOWN & RESUME)
 // ============================================================================
 window.dispatchDeviceCommand = async function(deviceId, commandType) {
-  if (!state.token) return;
   try {
     const isLock = commandType === "STOP_APP" || commandType === "LOCKDOWN_DEVICE";
     const actionText = isLock ? "Dispatching remote app shutdown..." : "Dispatching resume command...";
     showToast(actionText, "info");
 
-    const res = await fetch(`${API_BASE}/commands/dispatch`, {
+    const res = await apiFetch("/commands/dispatch", {
       method: "POST",
-      headers: {
-        "Authorization": `Bearer ${state.token}`,
-        "Content-Type": "application/json"
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         deviceId: deviceId,
         commandType: commandType,

@@ -269,7 +269,12 @@ public final class AppState: ObservableObject {
 
             do {
                 let (data, res) = try await URLSession.shared.data(for: req)
-                guard let http = res as? HTTPURLResponse, http.statusCode == 200 else { return }
+                guard let http = res as? HTTPURLResponse else { return }
+                if http.statusCode == 401 {
+                    self.cachedUserToken = nil
+                    return
+                }
+                guard http.statusCode == 200 else { return }
 
                 struct WebResp: Codable {
                     let date: String

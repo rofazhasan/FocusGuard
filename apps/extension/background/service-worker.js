@@ -63,17 +63,31 @@ async function getOrCreateDeviceId() {
   return cachedDeviceId;
 }
 
+function isTokenExpired(token) {
+  if (!token || typeof token !== 'string') return true;
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return true;
+    const payload = JSON.parse(atob(parts[1]));
+    if (!payload.exp) return false;
+    return Date.now() >= (payload.exp * 1000 - 45000);
+  } catch (e) {
+    return true;
+  }
+}
+
 /**
  * Retrieves cached JWT token from local storage, or attempts session authentication.
  */
 async function getOrFetchAuthToken() {
-  if (authToken) return authToken;
+  if (authToken && !isTokenExpired(authToken)) return authToken;
 
   try {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       const data = await chrome.storage.local.get(['focusguard_token', 'focusguard_device_token']);
-      if (data && (data.focusguard_token || data.focusguard_device_token)) {
-        authToken = data.focusguard_token || data.focusguard_device_token;
+      const candidate = data.focusguard_token || data.focusguard_device_token;
+      if (candidate && !isTokenExpired(candidate)) {
+        authToken = candidate;
         return authToken;
       }
     }
