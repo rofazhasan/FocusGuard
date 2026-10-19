@@ -27,6 +27,38 @@ public final class AppState: ObservableObject {
     @Published public var activePolicies: [Policy] = []
     @Published public var trackedTargets: [String] = []
     @Published public var recentSessions: [UsageSession] = []
+    @Published public var isFocusActive: Bool = false
+    @Published public var focusRemainingSeconds: Int = 0
+    @Published public var activeBlockedTargets: [String] = []
+
+    public struct WebsiteUsageItem: Identifiable, Codable {
+        public var id: String { domain }
+        public let domain: String
+        public let totalSeconds: Int
+        public let formattedTime: String
+        public let usedMinutes: Int
+        public let category: String
+        public let isDistraction: Bool
+        public let policyName: String?
+        public let limitSeconds: Int?
+        public let isExceeded: Bool
+
+        public init(domain: String, totalSeconds: Int, formattedTime: String, usedMinutes: Int, category: String, isDistraction: Bool, policyName: String? = nil, limitSeconds: Int? = nil, isExceeded: Bool = false) {
+            self.domain = domain
+            self.totalSeconds = totalSeconds
+            self.formattedTime = formattedTime
+            self.usedMinutes = usedMinutes
+            self.category = category
+            self.isDistraction = isDistraction
+            self.policyName = policyName
+            self.limitSeconds = limitSeconds
+            self.isExceeded = isExceeded
+        }
+    }
+
+    @Published public var websiteUsageList: [WebsiteUsageItem] = []
+    @Published public var totalWebsiteTime: String = "0s"
+    @Published public var totalWebsiteSeconds: Int = 0
 
     public enum NavigationItem: String, CaseIterable, Identifiable {
         case dashboard = "Dashboard"
@@ -52,8 +84,42 @@ public final class AppState: ObservableObject {
     public init(container: DependencyContainer) {
         self.container = container
         refreshState()
+        setupRealtimeCallbacks()
         startPeriodicTracking()
         startPeriodicSync()
+    }
+
+    private func setupRealtimeCallbacks() {
+        container.realtimeService.onStateChange = { [weak self] state in
+            Task { @MainActor [weak self] in
+                self?.realtimeState = state
+            }
+        }
+
+        container.realtimeService.onPolicyUpdated = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.refreshState()
+                self?.syncEventsNow()
+            }
+        }
+
+        container.realtimeService.onFocusChanged = { [weak self] active, seconds, targets in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                self.isFocusActive = active
+                self.focusRemainingSeconds = seconds
+                self.activeBlockedTargets = targets
+                if active {
+                    self.statusMessage = "⚡ Focus Mode Active: Fleet Lockdown Engaged"
+                    self.container.notificationAdapter.notifyLimitReached(
+                        appName: "Focus Mode (Fleet)",
+                        bundleIdentifier: "fleet.lockdown"
+                    )
+                } else {
+                    self.statusMessage = "Focus Mode Ended • Normal Browsing Restored"
+                }
+            }
+        }
     }
 
     private var syncTask: Task<Void, Never>?
@@ -62,6 +128,10 @@ public final class AppState: ObservableObject {
         if container.deviceService.isEnrolled() {
             container.realtimeService.connect()
             syncEventsNow()
+        } else {
+            Task { [weak self] in
+                await self?.autoEnrollWithLocalServer()
+            }
         }
 
         syncTask?.cancel()
@@ -73,6 +143,41 @@ public final class AppState: ObservableObject {
                     self.syncEventsNow()
                 }
             }
+        }
+    }
+
+    public func autoEnrollWithLocalServer() async {
+        guard !container.deviceService.isEnrolled() else {
+            container.realtimeService.connect()
+            syncEventsNow()
+            return
+        }
+
+        guard let loginUrl = URL(string: "http://localhost:8080/api/v1/auth/login") else { return }
+        var req = URLRequest(url: loginUrl)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: [
+            "email": "demo@focusguard.local",
+            "password": "focusguard123"
+        ])
+
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            if let httpResp = resp as? HTTPURLResponse, httpResp.statusCode == 200,
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let token = json["accessToken"] as? String {
+                let ownerDeviceID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+                try container.deviceService.pairDevice(deviceId: ownerDeviceID, deviceToken: token, deviceName: self.deviceName)
+                container.realtimeService.connect()
+                refreshState()
+                self.statusMessage = "Connected to FocusGuard Fleet Command Center"
+                syncEventsNow()
+            } else {
+                container.realtimeService.connect()
+            }
+        } catch {
+            container.realtimeService.connect()
         }
     }
 
@@ -108,14 +213,71 @@ public final class AppState: ObservableObject {
     }
 
     private var trackingTask: Task<Void, Never>?
+    private var trackingTickCount: Int = 0
+    private var cachedUserToken: String?
+
+    public func fetchWebsiteAnalytics() {
+        Task { [weak self] in
+            guard let self = self else { return }
+
+            if self.cachedUserToken == nil {
+                guard let loginURL = URL(string: "http://localhost:8080/api/v1/auth/login") else { return }
+                var loginReq = URLRequest(url: loginURL)
+                loginReq.httpMethod = "POST"
+                loginReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                let body: [String: String] = ["email": "demo@focusguard.local", "password": "focusguard123"]
+                loginReq.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+                if let (data, res) = try? await URLSession.shared.data(for: loginReq),
+                   let http = res as? HTTPURLResponse, http.statusCode == 200,
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let tok = json["accessToken"] as? String {
+                    self.cachedUserToken = tok
+                }
+            }
+
+            guard let token = self.cachedUserToken,
+                  let webURL = URL(string: "http://localhost:8080/api/v1/analytics/websites") else { return }
+
+            var req = URLRequest(url: webURL)
+            req.httpMethod = "GET"
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+            do {
+                let (data, res) = try await URLSession.shared.data(for: req)
+                guard let http = res as? HTTPURLResponse, http.statusCode == 200 else { return }
+
+                struct WebResp: Codable {
+                    let date: String
+                    let totalSeconds: Int
+                    let formattedTime: String
+                    let websites: [WebsiteUsageItem]
+                }
+
+                let decoded = try JSONDecoder().decode(WebResp.self, from: data)
+                await MainActor.run {
+                    self.websiteUsageList = decoded.websites
+                    self.totalWebsiteTime = decoded.formattedTime
+                    self.totalWebsiteSeconds = decoded.totalSeconds
+                }
+            } catch {
+                // Silently retain last known data if network offline
+            }
+        }
+    }
 
     public func startPeriodicTracking() {
         trackingTask?.cancel()
+        fetchWebsiteAnalytics()
         trackingTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard let self = self, !Task.isCancelled else { break }
-                try? self.container.usageService.tick(deltaSeconds: 1)
+                _ = try? self.container.usageService.tick(deltaSeconds: 1)
+                self.trackingTickCount += 1
+                if self.trackingTickCount % 3 == 0 {
+                    self.fetchWebsiteAnalytics()
+                }
                 self.refreshState()
             }
         }

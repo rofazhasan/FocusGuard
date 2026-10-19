@@ -61,6 +61,26 @@ public struct DevicesView: View {
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
 
+                        Button(action: {
+                            Task {
+                                await appState.autoEnrollWithLocalServer()
+                            }
+                        }) {
+                            Label("1-Click Connect to Local Fleet (:8080)", systemImage: "bolt.horizontal.circle.fill")
+                                .font(.system(size: 13, weight: .bold))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.cyan)
+
+                        HStack {
+                            VStack { Divider() }
+                            Text("OR").font(.system(size: 10, weight: .bold)).foregroundColor(.secondary)
+                            VStack { Divider() }
+                        }
+                        .padding(.vertical, 4)
+
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Dashboard Pairing Code (e.g. FG-XXXXXX)")
                                 .font(.system(size: 11, weight: .semibold))

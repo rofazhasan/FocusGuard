@@ -99,22 +99,74 @@ public struct DashboardView: View {
                     .cornerRadius(12)
                 }
 
-                // Recent Sessions Card
+                // Top Websites & Recent Sessions Card
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Recent Usage Sessions")
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                    HStack {
+                        Text("Top Websites Visited Today")
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                        Spacer()
+                        if !appState.totalWebsiteTime.isEmpty && appState.totalWebsiteTime != "0s" {
+                            Text("Total: \(appState.totalWebsiteTime)")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundColor(.accentColor)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Color.accentColor.opacity(0.12))
+                                .cornerRadius(6)
+                        }
+                    }
 
-                    if appState.recentSessions.isEmpty {
+                    if appState.websiteUsageList.isEmpty && appState.recentSessions.isEmpty {
                         VStack(spacing: 8) {
-                            Image(systemName: "tray")
+                            Image(systemName: "globe")
                                 .font(.system(size: 28))
                                 .foregroundColor(.secondary)
-                            Text("No recent sessions recorded yet")
+                            Text("No website or application usage recorded yet today")
                                 .font(.system(size: 13))
                                 .foregroundColor(.secondary)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 32)
+                    } else if !appState.websiteUsageList.isEmpty {
+                        VStack(spacing: 8) {
+                            ForEach(appState.websiteUsageList.prefix(5)) { item in
+                                HStack {
+                                    Image(systemName: item.isDistraction ? "tv" : "globe")
+                                        .foregroundColor(item.isDistraction ? .red : .accentColor)
+                                        .font(.system(size: 15))
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item.domain)
+                                            .font(.system(size: 13, weight: .semibold))
+                                        Text(item.category)
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.secondary)
+                                    }
+
+                                    Spacer()
+
+                                    if item.isExceeded {
+                                        Text("EXCEEDED")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Color.red.opacity(0.15))
+                                            .foregroundColor(.red)
+                                            .cornerRadius(4)
+                                    }
+
+                                    Text(item.formattedTime)
+                                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.secondary.opacity(0.1))
+                                        .cornerRadius(6)
+                                }
+                                .padding(10)
+                                .background(Color(nsColor: .controlBackgroundColor))
+                                .cornerRadius(8)
+                            }
+                        }
                     } else {
                         VStack(spacing: 8) {
                             ForEach(appState.recentSessions.prefix(5), id: \.id) { session in

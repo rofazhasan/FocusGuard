@@ -51,10 +51,10 @@ jobs:
           cd backend
           go vet ./...
 
-      - name: Run Unit & Integration Tests
+      - name: Run Unit & Integration Tests (with Race Detector)
         run: |
           cd backend
-          go test -v -cover ./...
+          go test -v -race -cover ./...
         env:
           DB_HOST: localhost
           DB_PORT: 5432

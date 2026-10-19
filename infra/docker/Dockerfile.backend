@@ -24,10 +24,17 @@ FROM alpine:3.19
 
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata curl && \
+    addgroup -g 10001 focusguard && \
+    adduser -D -u 10001 -G focusguard focusguard
 
 COPY --from=builder /app/focusguard-server .
 
+USER focusguard:focusguard
+
 EXPOSE 8080
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8080/ready || exit 1
 
 CMD ["./focusguard-server"]

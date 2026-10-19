@@ -7,7 +7,9 @@ WORKDIR /app
 COPY apps/web/package.json ./
 RUN if [ -f package.json ]; then npm install --production; fi
 
-COPY apps/web/ ./
+COPY --chown=node:node apps/web/ ./
+
+USER node
 
 ENV PORT=3001
 ENV NODE_ENV=production

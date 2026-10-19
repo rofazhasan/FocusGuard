@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -325,13 +326,9 @@ func (c *ActivityCollector) checkExtensionWatchdog(appName string, now time.Time
 }
 
 func (c *ActivityCollector) forceTerminateBrowser(appName string) {
-	if runtime.GOOS == "darwin" {
+	if runtime.GOOS == "darwin" && os.Getenv("ENFORCE_HARD_BROWSER_KILL") == "true" {
 		script := fmt.Sprintf(`tell application "%s" to quit`, appName)
 		_ = exec.Command("osascript", "-e", script).Run()
-		go func() {
-			time.Sleep(1 * time.Second)
-			_ = exec.Command("pkill", "-9", "-f", appName).Run()
-		}()
 	}
 }
 

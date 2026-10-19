@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,7 +34,31 @@ import (
 	"github.com/focusguard/focusguard/backend/pkg/logger"
 )
 
+func loadEnvFile(paths ...string) {
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				k := strings.TrimSpace(parts[0])
+				v := strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+				if os.Getenv(k) == "" {
+					_ = os.Setenv(k, v)
+				}
+			}
+		}
+	}
+}
+
 func main() {
+	loadEnvFile(".env", "backend/.env", "../.env")
 	logger.Info("Starting FocusGuard Multi-Device Production Server...")
 
 	// Environment configuration
@@ -42,8 +67,19 @@ func main() {
 		port = "8080"
 	}
 	jwtSecret := os.Getenv("JWT_SECRET")
+	envMode := os.Getenv("ENV")
+	if envMode == "" {
+		envMode = os.Getenv("NODE_ENV")
+	}
+
 	if jwtSecret == "" {
+		if envMode == "production" {
+			logger.Fatal("Production security failure: JWT_SECRET must be set in production mode")
+		}
 		jwtSecret = "focusguard_super_secret_jwt_key_2026"
+		logger.Warn("Using default development JWT_SECRET. Do not use in production.")
+	} else if envMode == "production" && (jwtSecret == "focusguard_super_secret_jwt_key_2026" || len(jwtSecret) < 32) {
+		logger.Fatal("Production security failure: JWT_SECRET must be unique and at least 32 characters long in production mode")
 	}
 
 	// Database setup (Auto SQLite fallback if Postgres is absent)
@@ -171,12 +207,29 @@ func main() {
 	r.Use(chiMiddleware.Recoverer)
 	r.Use(chiMiddleware.Timeout(30 * time.Second))
 
+	allowedOrigins := []string{"*"}
+	allowCreds := false
+	if customOrigins := os.Getenv("ALLOWED_ORIGINS"); customOrigins != "" {
+		allowedOrigins = strings.Split(customOrigins, ",")
+		allowCreds = true
+	} else if envMode != "production" {
+		allowedOrigins = []string{
+			"http://localhost:3000",
+			"http://localhost:5173",
+			"http://localhost:8080",
+			"http://127.0.0.1:3000",
+			"http://127.0.0.1:5173",
+			"http://127.0.0.1:8080",
+		}
+		allowCreds = true
+	}
+
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
+		AllowedOrigins:   allowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Request-ID", "If-None-Match"},
 		ExposedHeaders:   []string{"Link", "X-Server-Timestamp", "X-Request-ID", "X-Policy-Version", "ETag"},
-		AllowCredentials: true,
+		AllowCredentials: allowCreds,
 		MaxAge:           300,
 	}))
 
@@ -262,6 +315,7 @@ func main() {
 
 		// Analytics
 		r.Get("/api/v1/analytics/daily", analyticsHandler.GetDailyAnalytics)
+		r.Get("/api/v1/analytics/websites", analyticsHandler.GetWebsiteAnalytics)
 		r.Get("/api/v1/analytics/weekly", analyticsHandler.GetWeeklyAnalytics)
 		r.Get("/api/v1/analytics/timeline", analyticsHandler.GetTimeline)
 		r.Get("/api/v1/analytics/enforcement-timeline", analyticsHandler.GetEnforcementTimeline)

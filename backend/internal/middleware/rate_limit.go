@@ -9,6 +9,8 @@ import (
 	"github.com/focusguard/focusguard/backend/pkg/apierror"
 )
 
+const maxTrackedIPs = 20000
+
 type rateLimiter struct {
 	mu       sync.Mutex
 	requests map[string][]time.Time
@@ -54,6 +56,15 @@ func NewRateLimiter(limit int, window time.Duration) func(http.Handler) http.Han
 			rl.mu.Lock()
 			now := time.Now()
 			cutoff := now.Add(-rl.window)
+
+			// Memory bound protection: if map grows excessively, evict stale keys immediately
+			if len(rl.requests) >= maxTrackedIPs {
+				for k, times := range rl.requests {
+					if len(times) == 0 || !times[len(times)-1].After(cutoff) {
+						delete(rl.requests, k)
+					}
+				}
+			}
 
 			var recent []time.Time
 			for _, t := range rl.requests[ip] {

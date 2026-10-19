@@ -74,6 +74,76 @@ func min(a, b int) int {
 	return b
 }
 
+func normalizeTarget(target string) string {
+	target = strings.TrimSpace(strings.ToLower(target))
+	target = strings.TrimPrefix(target, "www.")
+	return target
+}
+
+func formatDuration(sec int) string {
+	if sec <= 0 {
+		return "0s"
+	}
+	if sec < 60 {
+		return fmt.Sprintf("%ds", sec)
+	}
+	hrs := sec / 3600
+	mins := (sec % 3600) / 60
+	secs := sec % 60
+	if hrs > 0 {
+		if secs > 0 {
+			return fmt.Sprintf("%dh %dm %ds", hrs, mins, secs)
+		}
+		return fmt.Sprintf("%dh %dm", hrs, mins)
+	}
+	if secs > 0 {
+		return fmt.Sprintf("%dm %ds", mins, secs)
+	}
+	return fmt.Sprintf("%dm", mins)
+}
+
+func isWebsiteTarget(target string) bool {
+	t := strings.ToLower(target)
+	if strings.HasPrefix(t, "localhost") {
+		return true
+	}
+	if strings.Contains(t, ".") && !strings.HasSuffix(t, ".app") && !strings.HasPrefix(t, "com.") && !strings.HasPrefix(t, "org.") {
+		return true
+	}
+	return false
+}
+
+func categorizeTarget(target string) (category string, isDistraction bool) {
+	t := strings.ToLower(target)
+	if strings.Contains(t, "youtube") || strings.Contains(t, "reddit") ||
+		strings.Contains(t, "netflix") || strings.Contains(t, "twitter") ||
+		strings.Contains(t, "x.com") || strings.Contains(t, "instagram") ||
+		strings.Contains(t, "tiktok") || strings.Contains(t, "facebook") ||
+		strings.Contains(t, "messenger") || strings.Contains(t, "twitch") {
+		return "Social & Entertainment", true
+	}
+	if strings.Contains(t, "github") || strings.Contains(t, "gitlab") ||
+		strings.Contains(t, "stackoverflow") || strings.Contains(t, "localhost") ||
+		strings.Contains(t, "terminal") || strings.Contains(t, "code") ||
+		strings.Contains(t, "xcode") {
+		return "Development & Engineering", false
+	}
+	if strings.Contains(t, "edu") || strings.Contains(t, "ruet") ||
+		strings.Contains(t, "campus") || strings.Contains(t, "classroom") ||
+		strings.Contains(t, "gov.bd") {
+		return "Education & Academic", false
+	}
+	if strings.Contains(t, "mail") || strings.Contains(t, "docs.google") ||
+		strings.Contains(t, "calendar") || strings.Contains(t, "slack") ||
+		strings.Contains(t, "notion") {
+		return "Work & Productivity", false
+	}
+	if isWebsiteTarget(t) {
+		return "Web & Media", false
+	}
+	return "Desktop Application", false
+}
+
 // GET /api/v1/analytics/daily
 func (h *Handler) GetDailyAnalytics(w http.ResponseWriter, r *http.Request) {
 	claims, ok := middleware.GetUserClaims(r.Context())
@@ -104,20 +174,40 @@ func (h *Handler) GetDailyAnalytics(w http.ResponseWriter, r *http.Request) {
 		rows, err := h.db.QueryContext(r.Context(), usageQ, claims.UserID.String(), todayStr)
 		if err == nil {
 			defer rows.Close()
+			targetSums := make(map[string]int)
 			totalSec := 0
 			for rows.Next() {
 				var targetVal string
 				var sec int
 				if err := rows.Scan(&targetVal, &sec); err == nil {
+					norm := normalizeTarget(targetVal)
+					targetSums[norm] += sec
 					totalSec += sec
-					resp.TopApplications = append(resp.TopApplications, AppUsageDto{
-						Name:         targetVal,
-						TargetValue:  targetVal,
-						Category:     "Active Media / App",
-						UsedMinutes:  sec / 60,
-						LimitMinutes: 30,
-					})
 				}
+			}
+
+			type kv struct {
+				Key string
+				Val int
+			}
+			var ss []kv
+			for k, v := range targetSums {
+				ss = append(ss, kv{k, v})
+			}
+			sort.Slice(ss, func(i, j int) bool {
+				return ss[i].Val > ss[j].Val
+			})
+
+			for _, item := range ss {
+				cat, _ := categorizeTarget(item.Key)
+				resp.TopApplications = append(resp.TopApplications, AppUsageDto{
+					Name:         item.Key,
+					TargetValue:  item.Key,
+					Category:     cat,
+					UsedMinutes:  item.Val / 60,
+					UsedSeconds:  item.Val,
+					LimitMinutes: 30,
+				})
 			}
 			resp.BudgetUsedMinutes = totalSec / 60
 		} else {
@@ -159,6 +249,115 @@ func (h *Handler) GetDailyAnalytics(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
 }
+
+// GET /api/v1/analytics/websites
+func (h *Handler) GetWebsiteAnalytics(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.GetUserClaims(r.Context())
+	if !ok {
+		http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	todayStr := time.Now().UTC().Format("2006-01-02")
+	resp := WebsiteAnalyticsResponse{
+		Date:          todayStr,
+		TotalSeconds:  0,
+		FormattedTime: "0s",
+		Websites:      []WebsiteUsageDto{},
+	}
+
+	if h.db != nil {
+		usageQ := `SELECT target_value, SUM(total_duration_seconds)
+		          FROM usage_aggregates
+		          WHERE user_id = $1 AND date = $2
+		          GROUP BY target_value
+		          ORDER BY SUM(total_duration_seconds) DESC`
+		rows, err := h.db.QueryContext(r.Context(), usageQ, claims.UserID.String(), todayStr)
+		if err == nil {
+			defer rows.Close()
+			domainSums := make(map[string]int)
+			totalSec := 0
+			for rows.Next() {
+				var targetVal string
+				var sec int
+				if err := rows.Scan(&targetVal, &sec); err == nil {
+					norm := normalizeTarget(targetVal)
+					if isWebsiteTarget(norm) {
+						domainSums[norm] += sec
+						totalSec += sec
+					}
+				}
+			}
+
+			// Query user policies to match limits
+			policyMap := make(map[string]struct {
+				Name         string
+				LimitSeconds int
+			})
+			pRows, pErr := h.db.QueryContext(r.Context(), `
+				SELECT pt.target_value, p.name, p.limit_seconds
+				FROM policy_targets pt
+				JOIN policies p ON pt.policy_id = p.id
+				WHERE p.user_id = $1 AND p.is_enabled = 1
+			`, claims.UserID.String())
+			if pErr == nil {
+				defer pRows.Close()
+				for pRows.Next() {
+					var tVal, pName string
+					var lSec int
+					if err := pRows.Scan(&tVal, &pName, &lSec); err == nil {
+						policyMap[normalizeTarget(tVal)] = struct {
+							Name         string
+							LimitSeconds int
+						}{Name: pName, LimitSeconds: lSec}
+					}
+				}
+			}
+
+			type domainKV struct {
+				Domain  string
+				Seconds int
+			}
+			var list []domainKV
+			for d, s := range domainSums {
+				list = append(list, domainKV{Domain: d, Seconds: s})
+			}
+			sort.Slice(list, func(i, j int) bool {
+				return list[i].Seconds > list[j].Seconds
+			})
+
+			for _, item := range list {
+				cat, isDistract := categorizeTarget(item.Domain)
+				pol, hasPol := policyMap[item.Domain]
+				dto := WebsiteUsageDto{
+					Domain:        item.Domain,
+					TotalSeconds:  item.Seconds,
+					FormattedTime: formatDuration(item.Seconds),
+					UsedMinutes:   item.Seconds / 60,
+					Category:      cat,
+					IsDistraction: isDistract,
+				}
+				if hasPol {
+					dto.PolicyName = pol.Name
+					dto.LimitSeconds = pol.LimitSeconds
+					if pol.LimitSeconds > 0 && item.Seconds >= pol.LimitSeconds {
+						dto.IsExceeded = true
+					}
+				}
+				resp.Websites = append(resp.Websites, dto)
+			}
+			resp.TotalSeconds = totalSec
+			resp.FormattedTime = formatDuration(totalSec)
+		} else {
+			logger.Error("Failed to query website analytics", "error", err)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
 
 // GET /api/v1/analytics/timeline
 func (h *Handler) GetTimeline(w http.ResponseWriter, r *http.Request) {

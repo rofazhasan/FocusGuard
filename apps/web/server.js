@@ -16,9 +16,7 @@ const MIME_TYPES = {
 
 const server = http.createServer((req, res) => {
   if (req.url === '/favicon.ico') {
-    res.writeHead(204);
-    res.end();
-    return;
+    req.url = '/favicon.png';
   }
 
   let filePath = path.join(PUBLIC_DIR, req.url === '/' ? 'index.html' : req.url);

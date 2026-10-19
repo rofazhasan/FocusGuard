@@ -9,6 +9,10 @@ public enum RealtimeConnectionState: String, Sendable, Equatable {
 
 public protocol RealtimeServiceProtocol: AnyObject, Sendable {
     var connectionState: RealtimeConnectionState { get }
+    var onStateChange: (@Sendable (RealtimeConnectionState) -> Void)? { get set }
+    var onRevocationReceived: (@Sendable () -> Void)? { get set }
+    var onFocusChanged: (@Sendable (Bool, Int, [String]) -> Void)? { get set }
+    var onPolicyUpdated: (@Sendable () -> Void)? { get set }
     func connect()
     func disconnect()
     func sendHeartbeat()
@@ -28,6 +32,8 @@ public final class RealtimeService: RealtimeServiceProtocol, @unchecked Sendable
 
     public var onStateChange: (@Sendable (RealtimeConnectionState) -> Void)?
     public var onRevocationReceived: (@Sendable () -> Void)?
+    public var onFocusChanged: (@Sendable (Bool, Int, [String]) -> Void)?
+    public var onPolicyUpdated: (@Sendable () -> Void)?
 
     public var connectionState: RealtimeConnectionState {
         lock.lock()
@@ -54,11 +60,7 @@ public final class RealtimeService: RealtimeServiceProtocol, @unchecked Sendable
             return
         }
 
-        guard let token = try? deviceService.getDeviceToken() else {
-            lock.unlock()
-            return
-        }
-
+        let token = (try? deviceService.getDeviceToken()) ?? ""
         isRunning = true
         _connectionState = .connecting
         lock.unlock()
@@ -99,10 +101,13 @@ public final class RealtimeService: RealtimeServiceProtocol, @unchecked Sendable
     }
 
     private func establishWebSocketConnection(token: String) {
-        let wsUrlString = serverBaseURL
+        var wsUrlString = serverBaseURL
             .replacingOccurrences(of: "http://", with: "ws://")
             .replacingOccurrences(of: "https://", with: "wss://")
-            + "/ws?token=" + token
+            + "/ws"
+        if !token.isEmpty {
+            wsUrlString += "?token=" + token
+        }
 
         guard let url = URL(string: wsUrlString) else {
             handleDisconnect()
@@ -110,7 +115,9 @@ public final class RealtimeService: RealtimeServiceProtocol, @unchecked Sendable
         }
 
         var request = URLRequest(url: url)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
 
         let task = urlSession.webSocketTask(with: request)
         lock.lock()
@@ -162,7 +169,7 @@ public final class RealtimeService: RealtimeServiceProtocol, @unchecked Sendable
     public func processIncomingMessage(_ rawText: String) {
         guard let data = rawText.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let eventName = json["event"] as? String else {
+              let eventName = (json["event"] as? String) ?? (json["type"] as? String) else {
             return
         }
 
@@ -171,8 +178,17 @@ public final class RealtimeService: RealtimeServiceProtocol, @unchecked Sendable
             handleDeviceRevocation()
 
         case "POLICY_UPDATED", "POLICY_CREATED", "POLICY_DELETED":
-            // Trigger local policy reload / sync
             try? policyService.reloadCache()
+            onPolicyUpdated?()
+
+        case "FOCUS_STARTED", "FOCUS_SESSION_STARTED":
+            let payload = json["payload"] as? [String: Any] ?? json
+            let durationMinutes = payload["durationMinutes"] as? Int ?? 45
+            let targets = payload["blockedTargets"] as? [String] ?? ["youtube.com", "instagram.com", "reddit.com", "tiktok.com"]
+            onFocusChanged?(true, durationMinutes * 60, targets)
+
+        case "FOCUS_ENDED", "FOCUS_SESSION_ENDED":
+            onFocusChanged?(false, 0, [])
 
         default:
             break
@@ -235,6 +251,11 @@ public final class MockRealtimeService: RealtimeServiceProtocol, @unchecked Send
     public var sentHeartbeatsCount = 0
     private let deviceService: DeviceService
     private let policyService: PolicyService
+
+    public var onStateChange: (@Sendable (RealtimeConnectionState) -> Void)?
+    public var onRevocationReceived: (@Sendable () -> Void)?
+    public var onFocusChanged: (@Sendable (Bool, Int, [String]) -> Void)?
+    public var onPolicyUpdated: (@Sendable () -> Void)?
 
     public var connectionState: RealtimeConnectionState {
         lock.lock()

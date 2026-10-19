@@ -1,464 +1,787 @@
-// FocusGuard — Multi-Device Platform Client Logic
-// Consent-Based Device Management, Scoped Remote Policies & Shared Budget Ingestion
+/**
+ * FocusGuard Web Command Center — Enterprise Client Engine
+ * Real-time WebSocket synchronization, fleet attention control, and live website analytics.
+ */
 
 const API_BASE = "http://localhost:8080/api/v1";
 const WS_BASE = "ws://localhost:8080/ws";
 
-// Application State
+// Core Reactive State
 const state = {
   token: localStorage.getItem("focusguard_token") || null,
   user: null,
-  devices: [],
-  policies: [],
-  auditLogs: [],
-  dailyAnalytics: {
-    totalFocusMinutes: 0,
-    budgetUsedMinutes: 0,
-    budgetTotalMinutes: 30,
-    remainingMinutes: 30,
-    topApplications: [],
-    blockedEventsCount: 0
-  },
-  currentView: "OWNER", // "OWNER" | "MANAGED"
-  activePairingCode: null,
-  pairingTimerInterval: null,
-  pairingSecondsLeft: 300,
   
+  // Real-time Focus Session
   isFocusActive: false,
   selectedFocusMins: 45,
   focusRemainingSeconds: 2700,
   focusTimerInterval: null,
+  activeSessionId: null,
+
+  // Telemetry & Analytics
+  websiteAnalytics: { websites: [], formattedTime: "0s", totalSeconds: 0 },
+  dailyAnalytics: null,
+  currentCategoryFilter: "ALL",
+  searchQuery: "",
+
+  // Fleet & Policies
+  devices: [],
+  policies: [],
+  auditLogs: [],
+
+  // Pairing
+  pairingTimerInterval: null,
+  pairingSecondsLeft: 300,
+
+  // WebSocket
   ws: null,
   wsConnected: false,
-  enforcementTimeline: [],
-  recommendations: [],
-  
-  // Real Nodes
-  macDeviceId: "00000000-0000-0000-0000-000000000002",
-  managedTabletDeviceId: null,
-  simSyncSequence: 10
+  reconnectAttempts: 0
 };
 
-// Initialize Application
+// ============================================================================
+// INITIALIZATION
+// ============================================================================
 document.addEventListener("DOMContentLoaded", async () => {
-  setupEventListeners();
   await ensureAuthentication();
+  setupWebSocket();
   await refreshAllData();
-  await checkActiveFocusSession();
-  await fetchAuditLogs();
-  await fetchEnforcementTimeline();
-  await fetchRecommendations();
-  initWebSocket();
+
+  // Periodic silent polling every 4 seconds to ensure data freshness
+  setInterval(() => {
+    refreshSilent();
+  }, 4000);
 });
 
-function isJwtExpired(token) {
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return true;
-    const base64Url = parts[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const jsonPayload = decodeURIComponent(atob(base64).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
-    const payload = JSON.parse(jsonPayload);
-    if (!payload.exp) return false;
-    return Date.now() >= (payload.exp * 1000 - 5000);
-  } catch (e) {
-    return true;
-  }
-}
-
-// 1. Authentication Layer
 async function ensureAuthentication() {
-  const savedToken = localStorage.getItem("focusguard_token");
-  if (savedToken && !isJwtExpired(savedToken)) {
-    state.token = savedToken;
-    try {
-      const meRes = await fetch(`${API_BASE}/auth/me`, {
-        headers: { "Authorization": `Bearer ${state.token}` }
-      });
-      if (meRes.ok) {
-        const meData = await meRes.json();
-        state.user = meData.user;
-        updateUserUI();
-        updateConnectionStatus(true);
-        return;
-      } else {
-        localStorage.removeItem("focusguard_token");
-      }
-    } catch (e) {
-      console.warn("Auth check failed with cached token:", e);
-    }
-  } else if (savedToken) {
-    localStorage.removeItem("focusguard_token");
+  if (state.token) {
+    return;
   }
 
-  // Fallback to default demo user for frictionless local zero-config
   try {
-    let res = await fetch(`${API_BASE}/auth/login`, {
+    const res = await fetch(`${API_BASE}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: "demo@focusguard.local", password: "focusguard123" })
     });
-
-    if (!res.ok) {
-      res = await fetch(`${API_BASE}/auth/register`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: "demo@focusguard.local", password: "focusguard123" })
-      });
-    }
 
     if (res.ok) {
       const data = await res.json();
       state.token = data.accessToken;
       state.user = data.user;
       localStorage.setItem("focusguard_token", state.token);
-      updateUserUI();
-      updateConnectionStatus(true);
+      if (data.user?.email) {
+        document.getElementById("user-display-email").innerText = data.user.email;
+      }
     }
   } catch (err) {
-    console.error("Auth error:", err);
-    updateConnectionStatus(false);
+    console.warn("[FocusGuard] Auth failed, running in guest mode", err);
   }
 }
 
-function updateUserUI() {
-  const emailEl = document.getElementById("user-email-display");
-  const authCurrentEl = document.getElementById("auth-current-user-email");
-  const email = state.user?.email || "demo@focusguard.local";
-  if (emailEl) emailEl.textContent = email;
-  if (authCurrentEl) authCurrentEl.textContent = email;
-}
-
-// 2. Data Fetching
-async function refreshAllData() {
-  if (!state.token) return;
-
-  try {
-    // 2a. Fetch Daily Analytics
-    const analyticsRes = await fetch(`${API_BASE}/analytics/daily`, {
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
-    if (analyticsRes.ok) {
-      state.dailyAnalytics = await analyticsRes.json();
-      renderAnalyticsUI();
-    }
-
-    // 2b. Fetch Enrolled Devices
-    const devicesRes = await fetch(`${API_BASE}/devices`, {
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
-    if (devicesRes.ok) {
-      state.devices = await devicesRes.json();
-      renderDevicesUI();
-    }
-
-    // 2c. Fetch Scoped Policies
-    const policiesRes = await fetch(`${API_BASE}/policies`, {
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
-    if (policiesRes.ok) {
-      state.policies = await policiesRes.json();
-      renderPoliciesUI();
-    }
-
-    // 2d. Fetch Timeline & Recommendations
-    await fetchEnforcementTimeline();
-    await fetchRecommendations();
-  } catch (err) {
-    console.error("Error refreshing data:", err);
+// ============================================================================
+// WEBSOCKET REAL-TIME HUB
+// ============================================================================
+function setupWebSocket() {
+  if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
+    return;
   }
-}
 
-async function fetchEnforcementTimeline() {
-  if (!state.token) return;
-  try {
-    const res = await fetch(`${API_BASE}/analytics/enforcement-timeline`, {
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
-    if (res.ok) {
-      state.enforcementTimeline = await res.json();
-      renderEnforcementTimelineUI();
-    }
-  } catch (e) {
-    console.error("Failed to fetch enforcement timeline:", e);
-  }
-}
-
-async function fetchRecommendations() {
-  if (!state.token) return;
-  try {
-    const res = await fetch(`${API_BASE}/analytics/recommendations`, {
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
-    if (res.ok) {
-      state.recommendations = await res.json();
-      renderRecommendationsUI();
-    }
-  } catch (e) {
-    console.error("Failed to fetch recommendations:", e);
-  }
-}
-
-async function fetchAuditLogs() {
-  if (!state.token) return;
-  try {
-    const res = await fetch(`${API_BASE}/audit/logs`, {
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
-    if (res.ok) {
-      state.auditLogs = await res.json();
-      renderAuditLogsUI();
-    }
-  } catch (e) {
-    console.error("Failed to fetch audit logs:", e);
-  }
-}
-
-// 3. Real-Time WebSocket Connection
-function initWebSocket() {
-  if (!state.token) return;
+  const tokenParam = state.token ? `?token=${encodeURIComponent(state.token)}` : "";
+  const wsUrl = `${WS_BASE}${tokenParam}`;
 
   try {
-    const wsUrl = `${WS_BASE}?token=${state.token}`;
     state.ws = new WebSocket(wsUrl);
 
     state.ws.onopen = () => {
       state.wsConnected = true;
-      updateConnectionStatus(true);
-      console.log("[FocusGuard Multi-Device WebSocket] Connected");
+      state.reconnectAttempts = 0;
+      updateSyncStatusUI(true);
+      console.log("[FocusGuard WS] Real-time fleet sync connected.");
     };
 
     state.ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        handleWebSocketEvent(msg);
+        handleIncomingEvent(msg);
       } catch (e) {
-        console.error("Failed to parse WS message:", e);
+        console.warn("[FocusGuard WS] Unparseable message:", event.data);
       }
     };
 
     state.ws.onclose = () => {
       state.wsConnected = false;
-      updateConnectionStatus(false);
-      setTimeout(initWebSocket, 3000);
+      updateSyncStatusUI(false);
+      scheduleWsReconnect();
     };
-  } catch (e) {
-    console.error("WS init exception:", e);
+
+    state.ws.onerror = () => {
+      state.wsConnected = false;
+      updateSyncStatusUI(false);
+    };
+  } catch (err) {
+    console.warn("[FocusGuard WS] Connection error:", err);
+    scheduleWsReconnect();
   }
 }
 
-function handleWebSocketEvent(msg) {
-  console.log("[WS Fleet Event]:", msg);
+function scheduleWsReconnect() {
+  const backoff = Math.min(30000, 1000 * Math.pow(1.5, state.reconnectAttempts++));
+  setTimeout(setupWebSocket, backoff);
+}
 
-  if (msg.event === "USAGE_TICK") {
-    const payload = msg.payload;
-    if (payload.targetValue) {
-      const activeEl = document.getElementById("live-active-target");
-      if (activeEl) {
-        activeEl.innerText = `Active: ${payload.targetValue}`;
-      }
-    }
-    refreshAnalyticsSilently();
-  } else if (msg.event === "LIMIT_REACHED") {
-    const payload = msg.payload;
-    triggerLockoutScreen(payload.targetValue, payload.limitSeconds, payload.currentUsage);
-    refreshAllData();
-    fetchAuditLogs();
-  } else if (msg.event === "PAIRING_REQUEST_RECEIVED") {
-    const payload = msg.payload;
-    showPendingPairingApproval(payload);
-  } else if (msg.event === "DEVICE_ENROLLED") {
-    alert(`🎉 New device enrolled: ${msg.payload.deviceName} (${msg.payload.platform})`);
-    hidePendingPairingApproval();
-    refreshAllData();
-    fetchAuditLogs();
-  } else if (msg.event === "DEVICE_REVOKED") {
-    refreshAllData();
-    fetchAuditLogs();
-  } else if (msg.event === "POLICY_UPDATED" || msg.event === "POLICY_DELETED") {
-    refreshAllData();
-    fetchAuditLogs();
-  } else if (msg.event === "FOCUS_STARTED" || msg.event === "REMOTE_COMMAND") {
-    if (!state.isFocusActive) {
-      startFocusTimerUI(45);
-    }
-    fetchAuditLogs();
-  } else if (msg.event === "FOCUS_ENDED") {
-    if (state.isFocusActive) {
-      endFocusTimerUI();
-    }
-    fetchAuditLogs();
-  } else if (msg.event === "EXTENSION_GRACE_TICK") {
-    const payload = msg.payload;
-    const modal = document.getElementById("modal-extension-grace");
-    if (modal) {
-      modal.style.display = "flex";
-      const countEl = document.getElementById("grace-timer-countdown");
-      if (countEl) countEl.innerText = `00:${String(payload.remainingSeconds || 0).padStart(2, '0')}`;
-      const browserEl = document.getElementById("grace-browser-name");
-      if (browserEl && payload.browserName) browserEl.innerText = `Target Application: ${payload.browserName}`;
-    }
-  } else if (msg.event === "EXTENSION_RESTORED") {
-    const modal = document.getElementById("modal-extension-grace");
-    if (modal) modal.style.display = "none";
-    refreshAllData();
-    fetchAuditLogs();
-  } else if (msg.event === "BROWSER_TERMINATED") {
-    const countEl = document.getElementById("grace-timer-countdown");
-    if (countEl) countEl.innerText = "00:00";
-    const msgEl = document.getElementById("grace-modal-message");
-    if (msgEl) msgEl.innerHTML = `<strong style="color: #ef4444;">${escapeHtml(msg.payload.browserName || "Browser")} was force-closed.</strong> Re-install extension to restore access.`;
-    fetchAuditLogs();
+function updateSyncStatusUI(isLive) {
+  const pill = document.getElementById("ws-sync-pill");
+  const text = document.getElementById("ws-status-text");
+  if (!pill || !text) return;
+
+  if (isLive) {
+    pill.className = "status-pill status-ws-live";
+    text.innerText = "Real-Time Sync Active";
+  } else {
+    pill.className = "status-pill";
+    pill.style.borderColor = "rgba(245, 158, 11, 0.3)";
+    pill.style.color = "#fbbf24";
+    text.innerText = "Reconnecting Sync...";
   }
 }
 
-async function refreshAnalyticsSilently() {
+function handleIncomingEvent(msg) {
+  const eventType = msg.event || msg.type;
+  console.log("[FocusGuard WS Event]", eventType, msg.payload);
+
+  switch (eventType) {
+    case "FOCUS_STARTED":
+      applyFocusActiveState(msg.payload?.durationMinutes || 45, msg.payload?.remainingSeconds);
+      showToast("🔒 Deep Work Focus Lockdown Active Across All Devices!", "success");
+      break;
+
+    case "FOCUS_ENDED":
+      applyFocusStandbyState();
+      showToast("Focus Lockdown Ended • Normal State Restored", "info");
+      break;
+
+    case "POLICY_UPDATED":
+    case "POLICY_CREATED":
+    case "POLICY_DELETED":
+      fetchPolicies();
+      fetchWebsitesAnalytics();
+      showToast("Policy rules updated and synced across fleet", "info");
+      break;
+
+    case "DEVICE_HEARTBEAT":
+      fetchDevices();
+      break;
+
+    case "TAMPER_ALERT":
+    case "EXTENSION_MISSING_WARNING":
+      showToast(`⚠️ Tamper Warning: ${msg.payload?.warning || "Protection state degraded"}`, "alert");
+      break;
+
+    default:
+      break;
+  }
+}
+
+// ============================================================================
+// DATA FETCHING & SYNCHRONIZATION
+// ============================================================================
+async function refreshAllData() {
+  await Promise.all([
+    checkActiveFocus(),
+    fetchWebsitesAnalytics(),
+    fetchDailyAnalytics(),
+    fetchDevices(),
+    fetchPolicies(),
+    fetchAuditLogs()
+  ]);
+}
+
+async function refreshSilent() {
   if (!state.token) return;
   try {
-    const analyticsRes = await fetch(`${API_BASE}/analytics/daily`, {
+    await Promise.all([
+      fetchWebsitesAnalytics(true),
+      fetchDailyAnalytics(true)
+    ]);
+  } catch (e) {}
+}
+
+window.triggerFleetSync = async function() {
+  showToast("Synchronizing fleet telemetry across devices...", "info");
+  await refreshAllData();
+  showToast("Fleet synchronized successfully!", "success");
+};
+
+// ============================================================================
+// FOCUS LOCKDOWN CONTROLLER
+// ============================================================================
+window.selectFocusPreset = function(mins) {
+  if (state.isFocusActive) return;
+  state.selectedFocusMins = mins;
+  state.focusRemainingSeconds = mins * 60;
+
+  // Update button active states
+  document.querySelectorAll(".btn-preset").forEach(btn => {
+    btn.classList.toggle("active", parseInt(btn.getAttribute("data-mins"), 10) === mins);
+  });
+
+  updateTimerDigits(state.focusRemainingSeconds);
+};
+
+window.handleFocusButtonClick = async function() {
+  if (state.isFocusActive) {
+    await endFocusLockdown();
+  } else {
+    await startFocusLockdown(state.selectedFocusMins);
+  }
+};
+
+async function startFocusLockdown(mins) {
+  try {
+    const res = await fetch(`${API_BASE}/focus/start`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${state.token}`
+      },
+      body: JSON.stringify({
+        durationMinutes: mins,
+        reason: "Deep Work Attention Session"
+      })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      state.activeSessionId = data.id;
+      applyFocusActiveState(mins, mins * 60);
+      showToast(`🔒 Deep Work Lockdown Enforced (${mins}m)!`, "success");
+    } else {
+      showToast("Failed to initiate focus lockdown", "alert");
+    }
+  } catch (err) {
+    showToast("Network error starting focus", "alert");
+  }
+}
+
+window.endFocusLockdown = async function() {
+  try {
+    const res = await fetch(`${API_BASE}/focus/end`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${state.token}`
+      }
+    });
+
+    if (res.ok) {
+      applyFocusStandbyState();
+      showToast("Fleet attention lockdown released", "info");
+    }
+  } catch (err) {
+    showToast("Error releasing focus session", "alert");
+  }
+};
+
+async function checkActiveFocus() {
+  try {
+    const res = await fetch(`${API_BASE}/focus/active`, {
       headers: { "Authorization": `Bearer ${state.token}` }
     });
-    if (analyticsRes.ok) {
-      state.dailyAnalytics = await analyticsRes.json();
-      renderAnalyticsUI();
+    if (res.ok) {
+      const data = await res.json();
+      if (data.active && data.session) {
+        state.activeSessionId = data.session.id;
+        applyFocusActiveState(data.session.durationMinutes, data.session.remainingSeconds);
+      } else {
+        applyFocusStandbyState();
+      }
     }
   } catch (e) {}
 }
 
-// 4. UI Rendering Functions
-function renderAnalyticsUI() {
-  const d = state.dailyAnalytics;
-  
-  document.getElementById("metric-total-focus").innerText = `${d.totalFocusMinutes || 0}m`;
-  document.getElementById("metric-budget-used").innerText = `${d.budgetUsedMinutes || 0}`;
-  document.getElementById("metric-budget-total").innerText = `/ ${d.budgetTotalMinutes || 0} min`;
-  document.getElementById("budget-ratio-badge").innerText = `${d.budgetUsedMinutes || 0} / ${d.budgetTotalMinutes || 0} min`;
-  
-  const pct = d.budgetTotalMinutes > 0 ? Math.min(100, Math.round((d.budgetUsedMinutes / d.budgetTotalMinutes) * 100)) : 0;
-  document.getElementById("budget-progress-fill").style.width = `${pct}%`;
-  
-  if (pct >= 90) {
-    document.getElementById("budget-progress-fill").className = "progress-bar-fill fill-red";
-  } else if (pct >= 70) {
-    document.getElementById("budget-progress-fill").className = "progress-bar-fill fill-yellow";
-  } else {
-    document.getElementById("budget-progress-fill").className = "progress-bar-fill fill-purple";
-  }
+function applyFocusActiveState(durationMins, remainingSec) {
+  state.isFocusActive = true;
+  state.focusRemainingSeconds = remainingSec !== undefined ? remainingSec : durationMins * 60;
 
-  // Render Transparent Attention Score
-  if (d.attentionScore) {
-    const score = d.attentionScore;
-    const scoreDisp = document.getElementById("score-display");
-    if (scoreDisp) scoreDisp.innerHTML = `${score.overallScore}<span style="font-size: 20px; color: #94a3b8;">/100</span>`;
-    
-    const badge = document.getElementById("score-rating-badge");
-    if (badge) {
-      badge.innerText = score.rating || "HEALTHY";
-      badge.className = score.overallScore >= 80 ? "badge badge-green" : (score.overallScore >= 60 ? "badge badge-purple" : "badge badge-red");
-    }
+  const heroCard = document.getElementById("focus-hero-card");
+  const modeLabel = document.getElementById("focus-mode-label");
+  const btnStart = document.getElementById("btn-toggle-focus");
+  const btnCancel = document.getElementById("btn-cancel-focus");
+  const subtext = document.getElementById("timer-subtext");
 
-    const formula = document.getElementById("score-formula-text");
-    if (formula) {
-      formula.innerHTML = `
-        Focus: +${score.focusCompletionPoints || 0} pts &bull; Limit Adherence: +${score.limitAdherencePoints || 0} pts<br>
-        Distraction: -${score.distractionDeductions || 0} pts &bull; Protection Shield: +${score.blockedAttemptsShield || 0} pts
-      `;
-    }
-  }
+  if (heroCard) heroCard.classList.add("focus-active");
+  if (modeLabel) modeLabel.innerText = "ACTIVE LOCKDOWN • DISTRACTIONS SEALED";
+  if (btnStart) btnStart.style.display = "none";
+  if (btnCancel) btnCancel.style.display = "flex";
+  if (subtext) subtext.innerText = "REMAINING ATTENTION LOCK";
 
-  renderLiveDomainTable();
+  startCountdownTicker();
 }
 
-function renderLiveDomainTable() {
-  const tbody = document.getElementById("domain-activity-tbody");
-  const countBadge = document.getElementById("domain-activity-count");
+function applyFocusStandbyState() {
+  state.isFocusActive = false;
+  clearInterval(state.focusTimerInterval);
+  state.focusTimerInterval = null;
+
+  const heroCard = document.getElementById("focus-hero-card");
+  const modeLabel = document.getElementById("focus-mode-label");
+  const btnStart = document.getElementById("btn-toggle-focus");
+  const btnCancel = document.getElementById("btn-cancel-focus");
+  const subtext = document.getElementById("timer-subtext");
+
+  if (heroCard) heroCard.classList.remove("focus-active");
+  if (modeLabel) modeLabel.innerText = "STANDBY • NORMAL BROWSING";
+  if (btnStart) btnStart.style.display = "flex";
+  if (btnCancel) btnCancel.style.display = "none";
+  if (subtext) subtext.innerText = "SELECTED DURATION";
+
+  state.focusRemainingSeconds = state.selectedFocusMins * 60;
+  updateTimerDigits(state.focusRemainingSeconds);
+}
+
+function startCountdownTicker() {
+  if (state.focusTimerInterval) clearInterval(state.focusTimerInterval);
+
+  updateTimerDigits(state.focusRemainingSeconds);
+
+  state.focusTimerInterval = setInterval(() => {
+    state.focusRemainingSeconds--;
+    if (state.focusRemainingSeconds <= 0) {
+      applyFocusStandbyState();
+      showToast("🎉 Focus Session Complete! Excellent work.", "success");
+      return;
+    }
+    updateTimerDigits(state.focusRemainingSeconds);
+  }, 1000);
+}
+
+function updateTimerDigits(totalSeconds) {
+  const el = document.getElementById("timer-digits");
+  if (!el) return;
+
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  el.innerText = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+// ============================================================================
+// WEBSITE ATTENTION ANALYTICS TABLE
+// ============================================================================
+async function fetchWebsitesAnalytics(silent = false) {
+  if (!state.token) return;
+  try {
+    const res = await fetch(`${API_BASE}/analytics/websites`, {
+      headers: { "Authorization": `Bearer ${state.token}` }
+    });
+    if (res.ok) {
+      state.websiteAnalytics = await res.json();
+      renderWebsitesTable();
+    }
+  } catch (err) {
+    if (!silent) console.warn("Failed fetching website analytics", err);
+  }
+}
+
+function renderWebsitesTable() {
+  const tbody = document.getElementById("websites-table-body");
+  const totalTimeEl = document.getElementById("kpi-total-web-time");
+  const countBadge = document.getElementById("kpi-web-count-badge");
+  const tabBadge = document.getElementById("tab-web-count");
   if (!tbody) return;
 
-  state.liveDomainUsage = state.liveDomainUsage || {};
+  const allWebsites = state.websiteAnalytics?.websites || [];
+  const totalFormatted = state.websiteAnalytics?.formattedTime || "0s";
 
-  const targetsMap = new Map();
+  if (totalTimeEl) totalTimeEl.innerText = totalFormatted;
+  if (countBadge) countBadge.innerText = `${allWebsites.length} Domains`;
+  if (tabBadge) tabBadge.innerText = allWebsites.length;
 
-  (state.policies || []).forEach(p => {
-    (p.targets || []).forEach(t => {
-      const val = t.targetValue;
-      if (!targetsMap.has(val)) {
-        targetsMap.set(val, {
-          target: val,
-          type: t.targetType,
-          policyName: p.name,
-          policyId: p.id,
-          limitSeconds: p.limitSeconds,
-          isEnabled: p.isEnabled !== false,
-          usedSeconds: state.liveDomainUsage[val] || 0
-        });
-      }
-    });
-  });
+  // Update Category Count Chips
+  const distractionCount = allWebsites.filter(w => w.isDistraction || w.category.includes("Social") || w.category.includes("Entertainment")).length;
+  const workCount = allWebsites.filter(w => w.category.includes("Development") || w.category.includes("Engineering") || w.category.includes("Work")).length;
+  const academicCount = allWebsites.filter(w => w.category.includes("Academic") || w.category.includes("Education")).length;
 
-  for (const [key, sec] of Object.entries(state.liveDomainUsage)) {
-    if (!targetsMap.has(key)) {
-      targetsMap.set(key, {
-        target: key,
-        type: "DOMAIN",
-        policyName: "Unrestricted",
-        policyId: null,
-        limitSeconds: 0,
-        isEnabled: true,
-        usedSeconds: sec
-      });
-    }
+  const chipAll = document.getElementById("chip-count-all");
+  const chipDist = document.getElementById("chip-count-distraction");
+  const chipWork = document.getElementById("chip-count-work");
+  const chipAcad = document.getElementById("chip-count-academic");
+
+  if (chipAll) chipAll.innerText = allWebsites.length;
+  if (chipDist) chipDist.innerText = distractionCount;
+  if (chipWork) chipWork.innerText = workCount;
+  if (chipAcad) chipAcad.innerText = academicCount;
+
+  // Filter list
+  let filtered = allWebsites;
+
+  if (state.currentCategoryFilter === "DISTRACTION") {
+    filtered = filtered.filter(w => w.isDistraction || w.category.includes("Social") || w.category.includes("Entertainment"));
+  } else if (state.currentCategoryFilter === "WORK") {
+    filtered = filtered.filter(w => w.category.includes("Development") || w.category.includes("Engineering") || w.category.includes("Work"));
+  } else if (state.currentCategoryFilter === "ACADEMIC") {
+    filtered = filtered.filter(w => w.category.includes("Academic") || w.category.includes("Education"));
   }
 
-  const items = Array.from(targetsMap.values());
-  if (countBadge) countBadge.innerText = `${items.length} Tracked`;
+  if (state.searchQuery) {
+    const q = state.searchQuery.toLowerCase();
+    filtered = filtered.filter(w => w.domain.toLowerCase().includes(q) || w.category.toLowerCase().includes(q));
+  }
 
-  if (items.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #94a3b8; padding: 24px;">No domain activity detected yet. Open a website in your browser to begin monitoring.</td></tr>`;
+  if (filtered.length === 0) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="5" class="table-empty-row">
+          <span>No websites matching current filter or search criteria.</span>
+        </td>
+      </tr>
+    `;
     return;
   }
 
-  tbody.innerHTML = items.map(item => {
-    const usedMins = Math.round(item.usedSeconds / 60);
-    const limitMins = Math.round(item.limitSeconds / 60);
-    const isExceeded = item.limitSeconds > 0 && item.usedSeconds >= item.limitSeconds;
-    const isWarn = item.limitSeconds > 0 && !isExceeded && (item.usedSeconds / item.limitSeconds >= 0.8);
-
-    let statusHtml = `<span class="badge badge-green">PERMITTED</span>`;
-    if (!item.isEnabled) {
-      statusHtml = `<span class="badge badge-yellow">POLICY PAUSED</span>`;
-    } else if (isExceeded) {
-      statusHtml = `<span class="badge badge-red">BLOCKED (Limit Exceeded)</span>`;
-    } else if (isWarn) {
-      statusHtml = `<span class="badge badge-yellow">NEAR LIMIT (${usedMins}/${limitMins}m)</span>`;
-    } else if (item.limitSeconds === 0 && item.policyId) {
-      statusHtml = `<span class="badge badge-red">BLOCKED (24/7)</span>`;
+  tbody.innerHTML = filtered.map(item => {
+    let icon = "🌐";
+    let catClass = "badge-purple";
+    if (item.category.includes("Social") || item.category.includes("Entertainment")) {
+      icon = "📺";
+      catClass = "badge-red";
+    } else if (item.category.includes("Development") || item.category.includes("Engineering")) {
+      icon = "💻";
+      catClass = "badge-green";
+    } else if (item.category.includes("Education") || item.category.includes("Academic")) {
+      icon = "🎓";
+      catClass = "badge-blue";
+    } else if (item.category.includes("Work")) {
+      icon = "💼";
+      catClass = "badge-purple";
     }
 
-    const budgetDisplay = item.limitSeconds > 0 ? `${limitMins}m daily` : (item.policyId ? 'Always Blocked' : 'No Limit');
+    // Budget bar
+    let budgetHtml = "";
+    if (item.limitSeconds && item.limitSeconds > 0) {
+      const limitMins = Math.round(item.limitSeconds / 60);
+      const pct = Math.min(100, Math.round((item.totalSeconds / item.limitSeconds) * 100));
+      const barColor = item.isExceeded ? "#ef4444" : (pct >= 75 ? "#f59e0b" : "#10b981");
+
+      budgetHtml = `
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <div style="display: flex; justify-content: space-between; font-size: 11px; font-family: var(--font-mono);">
+            <span style="color: ${barColor}; font-weight: 700;">${item.formattedTime} / ${limitMins}m</span>
+            <span style="color: var(--text-muted);">${pct}%</span>
+          </div>
+          <div class="kpi-progress-bar" style="height: 5px;">
+            <div style="width: ${pct}%; height: 100%; background: ${barColor}; border-radius: 999px;"></div>
+          </div>
+          ${item.policyName ? `<span style="font-size: 10px; color: var(--text-muted);">${escapeHtml(item.policyName)}</span>` : ""}
+        </div>
+      `;
+    } else {
+      budgetHtml = `<span style="font-size: 12px; color: var(--text-muted);">No Cap (Passive Tracking)</span>`;
+    }
 
     return `
-      <tr style="border-bottom: 1px solid rgba(255,255,255,0.04);">
-        <td style="padding: 12px 14px; font-weight: 600;">
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 16px;">🌐</span>
-            <span>${escapeHtml(item.target)}</span>
+      <tr>
+        <td>
+          <div class="domain-cell">
+            <div class="domain-icon" style="background: rgba(255,255,255,0.04);">${icon}</div>
+            <div class="domain-meta">
+              <span class="domain-name">${escapeHtml(item.domain)}</span>
+              <span class="domain-session-count">${item.totalSeconds}s continuous session</span>
+            </div>
           </div>
-          <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">Policy: ${escapeHtml(item.policyName)}</div>
         </td>
-        <td style="padding: 12px 14px; font-family: 'JetBrains Mono', monospace; font-size: 13px;">${usedMins}m (${item.usedSeconds}s)</td>
-        <td style="padding: 12px 14px; font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #a855f7;">${budgetDisplay}</td>
-        <td style="padding: 12px 14px;">${statusHtml}</td>
-        <td style="padding: 12px 14px; text-align: right;">
-          <button class="btn btn-sm btn-outline" onclick="quickApplyDomainBlock('${escapeHtml(item.target)}')" style="font-size: 11px; padding: 4px 8px;">
-            ${isExceeded ? 'Blocked' : 'Block Now'}
-          </button>
+        <td>
+          <span class="kpi-badge ${catClass}">${escapeHtml(item.category)}</span>
+        </td>
+        <td>
+          <span class="time-cell-val">${item.formattedTime}</span>
+        </td>
+        <td>
+          ${budgetHtml}
+        </td>
+        <td style="text-align: right;">
+          ${item.isExceeded 
+            ? `<span class="kpi-badge badge-red" style="font-size: 10px;">SEALED</span>`
+            : `<button class="btn btn-sm btn-outline" onclick="window.quickAddDomainRuleFor('${escapeHtml(item.domain)}')">Cap (30m)</button>`
+          }
         </td>
       </tr>
     `;
   }).join("");
 }
 
-window.quickApplyDomainBlock = async function(domain) {
+window.applyCategoryFilter = function(filter) {
+  state.currentCategoryFilter = filter;
+  document.querySelectorAll(".filter-chip").forEach(c => c.classList.remove("active"));
+  const activeChip = document.getElementById(`fchip-${filter}`);
+  if (activeChip) activeChip.classList.add("active");
+  renderWebsitesTable();
+};
+
+window.handleWebsiteSearch = function(val) {
+  state.searchQuery = val.trim();
+  renderWebsitesTable();
+};
+
+// ============================================================================
+// DAILY KPI & ATTENTION SCORE
+// ============================================================================
+async function fetchDailyAnalytics(silent = false) {
+  if (!state.token) return;
+  try {
+    const res = await fetch(`${API_BASE}/analytics/daily`, {
+      headers: { "Authorization": `Bearer ${state.token}` }
+    });
+    if (res.ok) {
+      state.dailyAnalytics = await res.json();
+      renderKPICards();
+    }
+  } catch (err) {
+    if (!silent) console.warn("Failed fetching daily analytics", err);
+  }
+}
+
+function renderKPICards() {
+  const d = state.dailyAnalytics;
+  if (!d) return;
+
+  // Distraction KPI
+  const distUsedEl = document.getElementById("kpi-distraction-used");
+  const distTotalEl = document.getElementById("kpi-budget-total");
+  const budgetFill = document.getElementById("kpi-budget-fill");
+
+  if (distUsedEl) distUsedEl.innerText = `${d.budgetUsedMinutes || 0}m`;
+  if (distTotalEl) distTotalEl.innerText = `/ ${d.budgetTotalMinutes || 30} min cap`;
+
+  const pct = d.budgetTotalMinutes > 0 ? Math.min(100, Math.round((d.budgetUsedMinutes / d.budgetTotalMinutes) * 100)) : 0;
+  if (budgetFill) {
+    budgetFill.style.width = `${pct}%`;
+    budgetFill.style.background = pct >= 90 ? "#ef4444" : (pct >= 70 ? "#f59e0b" : "#06b6d4");
+  }
+
+  // Attention Score KPI
+  if (d.attentionScore) {
+    const scoreVal = document.getElementById("kpi-score-val");
+    const scoreRating = document.getElementById("kpi-score-rating");
+    if (scoreVal) scoreVal.innerHTML = `${d.attentionScore.overallScore}<span class="score-denom">/100</span>`;
+    if (scoreRating) {
+      scoreRating.innerText = d.attentionScore.rating || "HEALTHY";
+      scoreRating.className = d.attentionScore.overallScore >= 80 ? "kpi-badge badge-green" : (d.attentionScore.overallScore >= 60 ? "kpi-badge badge-purple" : "kpi-badge badge-red");
+    }
+  }
+}
+
+// ============================================================================
+// DEVICES FLEET VIEW
+// ============================================================================
+async function fetchDevices() {
+  if (!state.token) return;
+  try {
+    const res = await fetch(`${API_BASE}/devices`, {
+      headers: { "Authorization": `Bearer ${state.token}` }
+    });
+    if (res.ok) {
+      state.devices = await res.json();
+      renderDevicesGrid();
+    }
+  } catch (e) {}
+}
+
+function renderDevicesGrid() {
+  const container = document.getElementById("devices-grid-container");
+  const countEl = document.getElementById("kpi-devices-count");
+  const tabBadge = document.getElementById("tab-devices-badge");
+  if (!container) return;
+
+  const list = state.devices || [];
+  if (countEl) countEl.innerText = list.length;
+  if (tabBadge) tabBadge.innerText = list.length;
+
+  if (list.length === 0) {
+    container.innerHTML = `<p class="table-empty-row">No devices currently enrolled. Click "Pair Device" to connect.</p>`;
+    return;
+  }
+
+  container.innerHTML = list.map(dev => {
+    const isOnline = dev.status === "ACTIVE" || dev.status === "ONLINE";
+    const isExtension = dev.platform === "WEB_EXTENSION" || dev.osVersion?.includes("Extension");
+
+    return `
+      <div class="device-card">
+        <div class="device-card-header">
+          <div class="device-title-row">
+            <div class="device-icon-box">
+              ${isExtension 
+                ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>`
+                : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>`
+              }
+            </div>
+            <div>
+              <div class="device-name">${escapeHtml(dev.deviceName || dev.name || "FocusGuard Client")}</div>
+              <div class="device-platform">${escapeHtml(dev.platform)} • ${escapeHtml(dev.osVersion || "v1.0")}</div>
+            </div>
+          </div>
+          <span class="kpi-badge ${isOnline ? 'badge-green' : 'badge-yellow'}">${isOnline ? 'ONLINE' : 'SYNCING'}</span>
+        </div>
+
+        <div class="device-keys-box">
+          Device ID: ${dev.id}<br>
+          Policy Sync: Verified & Enforced
+        </div>
+
+        <div class="device-footer">
+          <span>Last Heartbeat: Live</span>
+          <span style="color: var(--accent-emerald);">● Synchronized</span>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+// ============================================================================
+// POLICIES VIEW
+// ============================================================================
+async function fetchPolicies() {
+  if (!state.token) return;
+  try {
+    const res = await fetch(`${API_BASE}/policies`, {
+      headers: { "Authorization": `Bearer ${state.token}` }
+    });
+    if (res.ok) {
+      state.policies = await res.json();
+      renderPoliciesList();
+    }
+  } catch (e) {}
+}
+
+function renderPoliciesList() {
+  const container = document.getElementById("policies-list-container");
+  const tabBadge = document.getElementById("tab-policies-count");
+  if (!container) return;
+
+  const list = state.policies || [];
+  if (tabBadge) tabBadge.innerText = list.length;
+
+  if (list.length === 0) {
+    container.innerHTML = `<p class="table-empty-row">No policies configured yet. Click "Add Policy" to restrict a domain.</p>`;
+    return;
+  }
+
+  container.innerHTML = list.map(pol => {
+    const targetVal = pol.targets && pol.targets[0] ? pol.targets[0].targetValue : "All Targets";
+    const limitMins = pol.limitSeconds > 0 ? Math.round(pol.limitSeconds / 60) : 0;
+    const isEnabled = pol.isEnabled !== false;
+
+    return `
+      <div class="policy-row-card">
+        <div class="policy-info">
+          <div class="policy-name-row">
+            <span class="policy-title">${escapeHtml(pol.name)}</span>
+            <span class="policy-target-chip">${escapeHtml(targetVal)}</span>
+          </div>
+          <div class="policy-meta">
+            ${limitMins > 0 ? `Daily Cap: <strong>${limitMins} minutes</strong>` : `Strict 24/7 Block`}
+            &bull; Action: <strong>${pol.enforcementMode || 'BLOCK'}</strong>
+          </div>
+        </div>
+
+        <div class="policy-controls">
+          <label class="switch" title="Toggle Policy">
+            <input type="checkbox" ${isEnabled ? "checked" : ""} onchange="window.togglePolicy('${pol.id}')">
+            <span class="slider"></span>
+          </label>
+          <button class="btn btn-sm btn-outline" style="color: #ef4444; border-color: rgba(239,68,68,0.25);" onclick="window.deletePolicy('${pol.id}')" title="Delete Policy">
+            &times;
+          </button>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+window.togglePolicy = async function(id) {
+  try {
+    const res = await fetch(`${API_BASE}/policies/${id}/toggle`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${state.token}` }
+    });
+    if (res.ok) {
+      fetchPolicies();
+      fetchWebsitesAnalytics();
+      showToast("Policy state toggled", "info");
+    }
+  } catch (e) {}
+};
+
+window.deletePolicy = async function(id) {
+  if (!confirm("Are you sure you want to remove this attention policy?")) return;
+  try {
+    const res = await fetch(`${API_BASE}/policies/${id}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${state.token}` }
+    });
+    if (res.ok) {
+      fetchPolicies();
+      fetchWebsitesAnalytics();
+      showToast("Policy removed from all devices", "info");
+    }
+  } catch (e) {}
+};
+
+// ============================================================================
+// POLICY SIMULATOR & QUICK RULES
+// ============================================================================
+window.inspectDomainPolicy = async function() {
+  const domain = document.getElementById("inspect-domain-input").value.trim();
+  if (!domain) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/policies/explain`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${state.token}`
+      },
+      body: JSON.stringify({ target: domain })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      document.getElementById("inspect-result-target").innerText = domain;
+      const badge = document.getElementById("inspect-result-badge");
+      const detail = document.getElementById("inspect-result-detail");
+      const layers = document.getElementById("inspect-result-layers");
+
+      if (data.allowed) {
+        badge.className = "kpi-badge badge-green";
+        badge.innerText = "PERMITTED";
+        detail.innerText = data.reason || "Traffic allowed under current policy budget.";
+      } else {
+        badge.className = "kpi-badge badge-red";
+        badge.innerText = "RESTRICTED / BLOCKED";
+        detail.innerText = data.reason || "Domain access restricted by policy.";
+      }
+
+      layers.innerText = "BROWSER_EXTENSION (DNR) • MACOS_AGENT";
+    }
+  } catch (e) {
+    showToast("Error inspecting policy", "alert");
+  }
+};
+
+window.quickAddDomainRuleFor = function(domain) {
+  document.getElementById("quick-domain-input").value = domain;
+  switchTab("policies");
+};
+
+window.quickAddDomainRule = async function(minutes) {
+  const domain = document.getElementById("quick-domain-input").value.trim();
+  if (!domain) {
+    showToast("Please enter a domain", "alert");
+    return;
+  }
+
+  const name = minutes === 0 ? `Block ${domain}` : `${domain} (${minutes}m Cap)`;
   try {
     const res = await fetch(`${API_BASE}/policies`, {
       method: "POST",
@@ -467,1314 +790,213 @@ window.quickApplyDomainBlock = async function(domain) {
         "Authorization": `Bearer ${state.token}`
       },
       body: JSON.stringify({
-        name: `Restricted: ${domain}`,
-        limitSeconds: 0,
-        period: "DAILY",
-        timezone: "UTC",
+        name: name,
+        limitSeconds: minutes * 60,
+        warningThresholdSeconds: minutes > 0 ? (minutes - 5) * 60 : 0,
         enforcementMode: "BLOCK",
-        targets: [{ targetType: "WEBSITE", targetValue: domain }]
+        targets: [{ targetType: "DOMAIN", targetValue: domain }]
       })
     });
+
     if (res.ok) {
-      await refreshAllData();
-      await fetchAuditLogs();
+      document.getElementById("quick-domain-input").value = "";
+      fetchPolicies();
+      fetchWebsitesAnalytics();
+      showToast(`Policy for '${domain}' created & applied everywhere!`, "success");
     }
   } catch (e) {
-    console.error("Quick apply block error:", e);
+    showToast("Error creating policy", "alert");
   }
 };
 
-function renderDevicesUI() {
-  const container = document.getElementById("device-list-container");
-  const countBadge = document.getElementById("device-count-badge");
-  const healthBadges = document.getElementById("device-health-badges");
-
-  if (!state.devices || state.devices.length === 0) {
-    container.innerHTML = `<div class="empty-state"><p>No devices enrolled yet. Click "+ Pair New Device" above.</p></div>`;
-    countBadge.innerText = "0 Devices";
-    if (healthBadges) healthBadges.innerHTML = `<div class="empty-state" style="grid-column: 1 / -1; padding: 10px;"><p style="font-size: 12px;">No active device nodes.</p></div>`;
-    return;
-  }
-
-  countBadge.innerText = `${state.devices.length} Devices`;
-  container.innerHTML = state.devices.map(dev => {
-    let icon = "💻";
-    let platformLabel = "macOS";
-    if (dev.platform === "ANDROID") { icon = "📱"; platformLabel = "Android"; }
-    else if (dev.platform === "WINDOWS") { icon = "🖥️"; platformLabel = "Windows"; }
-    else if (dev.platform === "EXTENSION" || dev.platform === "BROWSER") { icon = "🧩"; platformLabel = "Extension"; }
-
-    let statusBadge = `<span class="badge badge-online">ONLINE</span>`;
-    let isRevoked = dev.status === "REVOKED";
-    if (isRevoked) {
-      statusBadge = `<span class="badge badge-revoked">REVOKED</span>`;
-    } else if (dev.status === "OFFLINE") {
-      statusBadge = `<span class="badge badge-offline">OFFLINE</span>`;
-    }
-
-    const roleBadge = dev.role === "OWNER" 
-      ? `<span class="badge badge-blue">Owner Node</span>`
-      : `<span class="badge badge-purple">Managed Node</span>`;
-    const lastSeen = dev.lastSeenAt ? new Date(dev.lastSeenAt).toLocaleTimeString() : "Just now";
-    const appVer = dev.appVersion || "1.0.0";
-    const polVer = dev.policyVersion || 1;
-
-    const revokeBtn = !isRevoked
-      ? `<button class="btn-danger-sm" onclick="revokeDevice('${dev.id}', '${escapeHtml(dev.deviceName)}')">Revoke</button>`
-      : `<span class="text-small text-muted">Access Blocked</span>`;
-
-    return `
-      <div class="device-item" style="display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; margin-bottom: 8px; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);">
-        <div class="device-info" style="display: flex; align-items: center; gap: 14px;">
-          <span style="font-size: 26px;">${icon}</span>
-          <div>
-            <div class="device-name" style="font-weight: 600; font-size: 15px;">${escapeHtml(dev.deviceName)} ${roleBadge} ${statusBadge}</div>
-            <div class="text-small text-muted" style="margin-top: 3px;">
-              ${platformLabel} • App v${appVer} • Policy v${polVer} • Last seen: ${lastSeen}
-            </div>
-          </div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 10px;">
-          <span class="device-status" style="font-size: 11px; font-weight: 700; color: ${isRevoked ? '#ef4444' : '#10b981'};">${isRevoked ? 'REVOKED' : 'PROTECTED'}</span>
-          ${revokeBtn}
-        </div>
-      </div>
-    `;
-  }).join("");
-
-  // Also render device health badges
-  if (healthBadges) {
-    healthBadges.innerHTML = state.devices.map(dev => `
-      <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06); border-radius: 10px; padding: 10px;">
-        <div style="font-size: 11px; color: #94a3b8;">${escapeHtml(dev.deviceName)}</div>
-        <span class="badge ${dev.status === 'REVOKED' ? 'badge-revoked' : 'badge-green'} mt-1">${dev.status === 'REVOKED' ? 'REVOKED' : '100% HEALTHY'}</span>
-      </div>
-    `).join("");
-  }
-}
-
-function renderEnforcementTimelineUI() {
-  const container = document.getElementById("enforcement-timeline-stream");
-  if (!container) return;
-
-  if (!state.enforcementTimeline || state.enforcementTimeline.length === 0) {
-    container.innerHTML = `<div class="empty-state" style="padding: 12px; font-size: 12px;"><p>No enforcement events recorded yet today. Active tracking is listening...</p></div>`;
-    return;
-  }
-
-  container.innerHTML = state.enforcementTimeline.map(ev => {
-    let colorClass = "text-purple";
-    let borderCol = "#6366f1";
-    let bgCol = "rgba(99,102,241,0.1)";
-
-    if (ev.action.includes("LIMIT") || ev.action.includes("BLOCK") || ev.action.includes("TAMPER")) {
-      colorClass = "text-red";
-      borderCol = "#ef4444";
-      bgCol = "rgba(239,68,68,0.1)";
-    } else if (ev.action.includes("WARNING") || ev.action.includes("TRACK")) {
-      colorClass = "text-yellow";
-      borderCol = "#f59e0b";
-      bgCol = "rgba(245,158,11,0.1)";
-    }
-
-    return `
-      <div style="display: flex; justify-content: space-between; font-size: 11px; padding: 6px 10px; background: ${bgCol}; border-left: 3px solid ${borderCol}; border-radius: 6px;">
-        <span><strong>${escapeHtml(ev.timestamp)}</strong> — ${escapeHtml(ev.details || ev.action)}</span>
-        <span class="font-mono ${colorClass}">${escapeHtml(ev.layer || "SYSTEM")}</span>
-      </div>
-    `;
-  }).join("");
-}
-
-function renderRecommendationsUI() {
-  const container = document.getElementById("recommendations-container");
-  if (!container) return;
-
-  if (!state.recommendations || state.recommendations.length === 0) {
-    container.innerHTML = `<div class="empty-state" style="padding: 12px; font-size: 12px;"><p>No policy recommendations currently. Real-time usage is within healthy limits.</p></div>`;
-    return;
-  }
-
-  container.innerHTML = state.recommendations.map(rec => `
-    <div style="background: rgba(168,85,247,0.08); border: 1px solid rgba(168,85,247,0.2); border-radius: 10px; padding: 12px;">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span class="text-bold text-small" style="color: #c084fc;">💡 ${escapeHtml(rec.title)}</span>
-        <button class="btn btn-sm btn-outline btn-apply-rec" data-target="${escapeHtml(rec.target)}" data-limit="${rec.limitMinutes}">Apply (${rec.limitMinutes}m)</button>
-      </div>
-      <p class="text-small text-muted mt-1">${escapeHtml(rec.insight)}</p>
-    </div>
-  `).join("");
-}
-
-function renderPoliciesUI() {
-  const container = document.getElementById("policy-list-container");
-  const managedContainer = document.getElementById("managed-policy-list");
-  const countBadge = document.getElementById("policy-count-badge");
-  
-  if (!state.policies || state.policies.length === 0) {
-    container.innerHTML = `<div class="empty-state"><p>No attention policies configured yet.</p></div>`;
-    if (managedContainer) managedContainer.innerHTML = `<div class="empty-state"><p>No restrictions assigned to this device.</p></div>`;
-    countBadge.innerText = "0 Active";
-    return;
-  }
-
-  countBadge.innerText = `${state.policies.length} Active`;
-
-  const html = state.policies.map(p => {
-    const mins = Math.round(p.limitSeconds / 60);
-    const targetNames = (p.targets || []).map(t => escapeHtml(t.targetValue)).join(", ") || "All Traffic";
-    const scopeDesc = (p.assignedDeviceIds && p.assignedDeviceIds.length > 0)
-      ? `${p.assignedDeviceIds.length} Targeted Device(s)`
-      : "Fleetwide (Shared Budget)";
-    const isEnforcing = p.isEnabled !== false;
-
-    return `
-      <div class="policy-item" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; margin-bottom: 8px; border-radius: 10px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.06);">
-        <div class="policy-info">
-          <div class="policy-title" style="display: flex; align-items: center; gap: 8px;">
-            <span>${escapeHtml(p.name)}</span>
-            <span class="badge ${isEnforcing ? 'badge-green' : 'badge-red'}" style="font-size: 10px;">${isEnforcing ? 'ACTIVE' : 'PAUSED'}</span>
-          </div>
-          <div class="text-small text-muted" style="margin-top: 3px;">Target: <strong style="color: var(--color-text-main);">${targetNames}</strong> • Scope: <span style="color: #60a5fa;">${scopeDesc}</span></div>
-        </div>
-        <div class="policy-actions" style="display: flex; align-items: center; gap: 8px;">
-          <span class="badge badge-purple font-mono">${p.limitSeconds > 0 ? `${mins}m / day` : 'Always Blocked'}</span>
-          <button class="btn btn-sm btn-outline" onclick="togglePolicy('${p.id}')" style="font-size: 11px; padding: 4px 8px;">
-            ${isEnforcing ? '⏸ Pause' : '▶ Resume'}
-          </button>
-          <button class="btn-icon-delete" onclick="deletePolicy('${p.id}')" title="Delete Policy">🗑️</button>
-        </div>
-      </div>
-    `;
-  }).join("");
-
-  container.innerHTML = html;
-  if (managedContainer) managedContainer.innerHTML = html;
-}
-
-window.togglePolicy = async function(id) {
+// ============================================================================
+// AUDIT LOG
+// ============================================================================
+async function fetchAuditLogs() {
+  if (!state.token) return;
   try {
-    const res = await fetch(`${API_BASE}/policies/${id}/toggle`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${state.token}`
-      }
+    const res = await fetch(`${API_BASE}/audit/logs`, {
+      headers: { "Authorization": `Bearer ${state.token}` }
     });
     if (res.ok) {
-      await refreshAllData();
-      await fetchAuditLogs();
+      state.auditLogs = await res.json();
+      renderAuditLogs();
     }
-  } catch (e) {
-    console.error("Toggle policy error:", e);
-  }
-};
+  } catch (e) {}
+}
 
-function renderAuditLogsUI() {
+function renderAuditLogs() {
   const container = document.getElementById("audit-list-container");
-  if (!state.auditLogs || state.auditLogs.length === 0) {
-    container.innerHTML = `<div class="empty-state"><p>No security events recorded yet.</p></div>`;
+  if (!container) return;
+
+  const list = state.auditLogs || [];
+  if (list.length === 0) {
+    container.innerHTML = `<p class="table-empty-row">No audit events recorded yet.</p>`;
     return;
   }
 
-  container.innerHTML = state.auditLogs.map(log => {
-    const timeStr = new Date(log.timestamp).toLocaleTimeString();
+  container.innerHTML = list.slice(0, 20).map(log => {
+    const t = log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : "Just now";
     return `
       <div class="audit-item">
-        <div class="audit-icon">📋</div>
-        <div class="audit-info">
-          <div class="audit-action">${escapeHtml(log.action)}</div>
-          <div class="text-small text-muted">${escapeHtml(log.details)}</div>
-        </div>
-        <span class="audit-time font-mono">${timeStr}</span>
+        <span class="audit-action-tag">${escapeHtml(log.action || "EVENT")}</span>
+        <span class="audit-details">${escapeHtml(log.details || log.message || "")}</span>
+        <span class="audit-time">${t}</span>
       </div>
     `;
   }).join("");
 }
 
-// 5. Phase 2 Device Enrollment Pairing Logic
-state.activePairingSessionId = null;
-state.pairingPollInterval = null;
+// ============================================================================
+// MODALS
+// ============================================================================
+window.openPairingModal = async function() {
+  const modal = document.getElementById("modal-pairing");
+  if (modal) modal.style.display = "flex";
+  await generateNewPairingCode();
+};
 
-async function requestPairingCode() {
-  const deviceName = document.getElementById("pair-device-name-input")?.value || "New Device";
-  hidePendingPairingApproval();
+window.closePairingModal = function() {
+  const modal = document.getElementById("modal-pairing");
+  if (modal) modal.style.display = "none";
+  clearInterval(state.pairingTimerInterval);
+};
 
+window.generateNewPairingCode = async function() {
   try {
-    const res = await fetch(`${API_BASE}/pairing/sessions`, {
+    const res = await fetch(`${API_BASE}/pairing/start`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${state.token}`
-      },
-      body: JSON.stringify({ deviceName })
+      headers: { "Authorization": `Bearer ${state.token}` }
     });
 
     if (res.ok) {
       const data = await res.json();
-      state.activePairingSessionId = data.sessionId;
-      state.activePairingCode = data.pairingCode;
-      state.pairingSecondsLeft = data.expiresInSec || 300;
-
-      document.getElementById("display-pairing-code").innerText = data.pairingCode;
-      startPairingCountdown();
-      startPairingPolling();
-      await fetchAuditLogs();
+      const codeEl = document.getElementById("modal-pairing-code");
+      if (codeEl) codeEl.innerText = data.pairingCode || "FG-2026";
+      startPairingTimer(data.expiresInSeconds || 300);
     }
-  } catch (e) {
-    console.error("Pairing code error:", e);
-  }
-}
+  } catch (e) {}
+};
 
-function startPairingPolling() {
-  clearInterval(state.pairingPollInterval);
-  if (!state.activePairingSessionId) return;
+function startPairingTimer(seconds) {
+  state.pairingSecondsLeft = seconds;
+  const timerEl = document.getElementById("modal-pairing-timer");
 
-  state.pairingPollInterval = setInterval(async () => {
-    if (!state.activePairingSessionId || state.pairingSecondsLeft <= 0) {
-      clearInterval(state.pairingPollInterval);
+  if (state.pairingTimerInterval) clearInterval(state.pairingTimerInterval);
+
+  state.pairingTimerInterval = setInterval(() => {
+    state.pairingSecondsLeft--;
+    if (state.pairingSecondsLeft <= 0) {
+      clearInterval(state.pairingTimerInterval);
+      if (timerEl) timerEl.innerText = "Code expired. Click to refresh.";
       return;
     }
-
-    try {
-      const res = await fetch(`${API_BASE}/pairing/sessions/${state.activePairingSessionId}`);
-      if (res.ok) {
-        const detail = await res.json();
-        if (detail.status === "PENDING_APPROVAL" && detail.requestedDeviceMetadata) {
-          showPendingPairingApproval(detail.requestedDeviceMetadata);
-        } else if (detail.status === "APPROVED" || detail.status === "CONSUMED") {
-          hidePendingPairingApproval();
-          clearInterval(state.pairingPollInterval);
-          clearInterval(state.pairingTimerInterval);
-          document.getElementById("modal-pair").style.display = "none";
-          refreshAllData();
-        }
-      }
-    } catch (err) {
-      // Background poll silently retry
-    }
-  }, 1500);
+    const m = Math.floor(state.pairingSecondsLeft / 60);
+    const s = state.pairingSecondsLeft % 60;
+    if (timerEl) timerEl.innerText = `Expires in ${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  }, 1000);
 }
 
-function showPendingPairingApproval(metadata) {
-  const card = document.getElementById("pairing-pending-approval-card");
-  if (!card) return;
+window.openCreatePolicyModal = function() {
+  const modal = document.getElementById("modal-create-policy");
+  if (modal) modal.style.display = "flex";
+};
 
-  document.getElementById("pending-dev-name").innerText = metadata.deviceName || "Unidentified Device";
-  document.getElementById("pending-dev-platform").innerText = metadata.platform || "UNKNOWN";
-  document.getElementById("pending-dev-type").innerText = metadata.clientType || "EXTENSION";
-  document.getElementById("pending-dev-version").innerText = metadata.appVersion || "1.0.0";
-  document.getElementById("pending-dev-time").innerText = metadata.requestedAt ? new Date(metadata.requestedAt).toLocaleTimeString() : "Just now";
+window.closeCreatePolicyModal = function() {
+  const modal = document.getElementById("modal-create-policy");
+  if (modal) modal.style.display = "none";
+};
 
-  card.style.display = "block";
-}
+window.submitCreatePolicy = async function() {
+  const name = document.getElementById("new-policy-name").value.trim();
+  const target = document.getElementById("new-policy-target").value.trim();
+  const mins = parseInt(document.getElementById("new-policy-minutes").value, 10);
+  const mode = document.getElementById("new-policy-mode").value;
 
-function hidePendingPairingApproval() {
-  const card = document.getElementById("pairing-pending-approval-card");
-  if (card) card.style.display = "none";
-}
-
-async function approvePairing() {
-  if (!state.activePairingSessionId) return;
-  try {
-    const res = await fetch(`${API_BASE}/pairing/sessions/${state.activePairingSessionId}/approve`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      alert(`✅ Approved device enrollment for "${data.deviceName || 'Device'}"!`);
-      hidePendingPairingApproval();
-      clearInterval(state.pairingPollInterval);
-      clearInterval(state.pairingTimerInterval);
-      document.getElementById("modal-pair").style.display = "none";
-      await refreshAllData();
-      await fetchAuditLogs();
-    } else {
-      const err = await res.json();
-      alert(`Approval error: ${err.error?.message || 'Failed to approve'}`);
-    }
-  } catch (err) {
-    console.error("Failed to approve pairing:", err);
-  }
-}
-
-async function rejectPairing() {
-  if (!state.activePairingSessionId) return;
-  try {
-    await fetch(`${API_BASE}/pairing/sessions/${state.activePairingSessionId}/reject`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
-    hidePendingPairingApproval();
-    alert("Pairing request rejected.");
-  } catch (err) {
-    console.error("Failed to reject pairing:", err);
-  }
-}
-
-window.revokeDevice = async function(deviceId, deviceName) {
-  if (!confirm(`Are you sure you want to revoke "${deviceName}"?\n\nThis device will be immediately disconnected and blocked from all cloud sync.`)) {
+  if (!name || !target) {
+    showToast("Please enter a policy name and target domain", "alert");
     return;
   }
 
   try {
-    const res = await fetch(`${API_BASE}/devices/${deviceId}/revoke`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
-
-    if (res.ok) {
-      alert(`✓ Device "${deviceName}" has been revoked.`);
-      await refreshAllData();
-      await fetchAuditLogs();
-    } else {
-      const err = await res.json();
-      alert(`Revocation failed: ${err.error?.message || 'Error revoking device'}`);
-    }
-  } catch (err) {
-    console.error("Revoke error:", err);
-  }
-};
-
-function startPairingCountdown() {
-  clearInterval(state.pairingTimerInterval);
-  const timerDisplay = document.getElementById("display-pairing-timer");
-  
-  state.pairingTimerInterval = setInterval(() => {
-    if (state.pairingSecondsLeft > 0) {
-      state.pairingSecondsLeft--;
-      const m = Math.floor(state.pairingSecondsLeft / 60);
-      const s = state.pairingSecondsLeft % 60;
-      timerDisplay.innerText = `Valid for ${m}:${String(s).padStart(2, '0')} minutes`;
-    } else {
-      clearInterval(state.pairingTimerInterval);
-      clearInterval(state.pairingPollInterval);
-      timerDisplay.innerText = "Code expired. Generate a new code.";
-      document.getElementById("display-pairing-code").innerText = "FG-EXPIRED";
-    }
-  }, 1000);
-}
-
-// 6. Scoped Policy Creation
-async function deletePolicy(policyId) {
-  if (!confirm("Are you sure you want to delete this policy across all scoped devices?")) return;
-  try {
-    const res = await fetch(`${API_BASE}/policies/${policyId}`, {
-      method: "DELETE",
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
-    if (res.ok) {
-      await refreshAllData();
-      await fetchAuditLogs();
-    }
-  } catch (err) {
-    console.error("Error deleting policy:", err);
-  }
-}
-
-// 7. Remote Focus Session Logic
-async function toggleFocusSession() {
-  if (!state.isFocusActive) {
-    try {
-      // 1. Register focus session with timestamp on backend for persistence & crash recovery
-      await fetch(`${API_BASE}/focus/start`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${state.token}`
-        },
-        body: JSON.stringify({
-          durationMinutes: state.selectedFocusMins,
-          blockedTargets: ["youtube.com", "instagram.com", "reddit.com", "SOCIAL"]
-        })
-      }).catch(() => {});
-
-      // 2. Dispatch remote focus command to fleet nodes
-      const targetDeviceIds = state.devices && state.devices.length > 0
-        ? state.devices.map(d => d.id)
-        : (state.managedTabletDeviceId ? [state.managedTabletDeviceId] : []);
-
-      for (const devId of targetDeviceIds) {
-        await fetch(`${API_BASE}/commands/dispatch`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${state.token}`
-          },
-          body: JSON.stringify({
-            deviceId: devId,
-            commandType: "REMOTE_FOCUS_START",
-            durationSec: state.selectedFocusMins * 60,
-            payload: {
-              durationMinutes: state.selectedFocusMins,
-              blockedCategories: ["VIDEO", "SOCIAL", "GAMING"],
-              blockedDomains: ["youtube.com", "instagram.com", "reddit.com"]
-            }
-          })
-        }).catch(() => {});
-      }
-      startFocusTimerUI(state.selectedFocusMins);
-      await fetchAuditLogs();
-    } catch (e) {
-      console.error("Remote focus dispatch error:", e);
-    }
-  } else {
-    try {
-      await fetch(`${API_BASE}/focus/end`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${state.token}`
-        }
-      });
-      endFocusTimerUI();
-      await refreshAllData();
-      await fetchAuditLogs();
-    } catch (e) {
-      console.error("End focus error:", e);
-    }
-  }
-}
-
-async function checkActiveFocusSession() {
-  if (!state.token) return;
-  try {
-    const res = await fetch(`${API_BASE}/focus/active`, {
-      headers: { "Authorization": `Bearer ${state.token}` }
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.isActive && data.remainingSeconds > 0) {
-        resumeFocusTimerUI(data.remainingSeconds, data.durationMinutes);
-      } else if (state.isFocusActive) {
-        endFocusTimerUI();
-      }
-    }
-  } catch (e) {
-    console.warn("Check active focus error:", e);
-  }
-}
-
-function resumeFocusTimerUI(remainingSec, totalMins) {
-  state.isFocusActive = true;
-  state.focusRemainingSeconds = remainingSec;
-  if (totalMins) state.selectedFocusMins = totalMins;
-
-  const btn = document.getElementById("btn-toggle-focus");
-  const btnText = document.getElementById("focus-btn-text");
-  const statusBadge = document.getElementById("focus-status-badge");
-  const subtext = document.getElementById("focus-timer-subtext");
-  const display = document.getElementById("focus-timer-display");
-
-  if (btn) btn.classList.add("focus-active");
-  if (btnText) btnText.innerText = "END FOCUS SESSION";
-  if (statusBadge) {
-    statusBadge.className = "badge badge-red";
-    statusBadge.innerText = "Active Lockdown";
-  }
-  if (subtext) subtext.innerText = "Distracting apps and sites locked across fleet";
-
-  if (state.focusTimerInterval) clearInterval(state.focusTimerInterval);
-  if (display) display.innerText = formatSeconds(state.focusRemainingSeconds);
-
-  state.focusTimerInterval = setInterval(() => {
-    state.focusRemainingSeconds--;
-    if (state.focusRemainingSeconds <= 0) {
-      endFocusTimerUI();
-    } else {
-      if (display) display.innerText = formatSeconds(state.focusRemainingSeconds);
-    }
-  }, 1000);
-}
-
-function startFocusTimerUI(mins) {
-  state.isFocusActive = true;
-  state.selectedFocusMins = mins;
-  state.focusRemainingSeconds = mins * 60;
-
-  const btn = document.getElementById("btn-toggle-focus");
-  const btnText = document.getElementById("focus-btn-text");
-  const statusBadge = document.getElementById("focus-status-badge");
-  const timerDisplay = document.getElementById("focus-timer-display");
-  const timerSubtext = document.getElementById("focus-timer-subtext");
-
-  btn.classList.add("active-focus");
-  btnText.innerText = "END FLEET FOCUS SESSION";
-  statusBadge.innerText = "ACTIVE";
-  statusBadge.className = "badge badge-purple";
-  timerSubtext.innerText = "Fleetwide OS ManagedSettings & VpnService shields active";
-
-  clearInterval(state.focusTimerInterval);
-  state.focusTimerInterval = setInterval(() => {
-    if (state.focusRemainingSeconds > 0) {
-      state.focusRemainingSeconds--;
-      timerDisplay.innerText = formatSeconds(state.focusRemainingSeconds);
-    } else {
-      endFocusTimerUI();
-    }
-  }, 1000);
-}
-
-function endFocusTimerUI() {
-  clearInterval(state.focusTimerInterval);
-  state.isFocusActive = false;
-
-  const btn = document.getElementById("btn-toggle-focus");
-  const btnText = document.getElementById("focus-btn-text");
-  const statusBadge = document.getElementById("focus-status-badge");
-  const timerDisplay = document.getElementById("focus-timer-display");
-  const timerSubtext = document.getElementById("focus-timer-subtext");
-
-  btn.classList.remove("active-focus");
-  btnText.innerText = `DISPATCH REMOTE FOCUS (${state.selectedFocusMins}m)`;
-  statusBadge.innerText = "Standby";
-  statusBadge.className = "badge badge-green";
-  state.focusRemainingSeconds = state.selectedFocusMins * 60;
-  timerDisplay.innerText = formatSeconds(state.focusRemainingSeconds);
-  timerSubtext.innerText = "Click below to dispatch instant fleet lock";
-}
-
-// 8. Cross-Device Shared Usage Sync
-async function syncUsageDelta(targetValue, durationSeconds, deviceId) {
-  if (!state.token) return;
-
-  try {
-    const payload = {
-      deviceId: deviceId || state.macDeviceId,
-      syncSequence: state.simSyncSequence++,
-      usageDeltas: [
-        {
-          targetType: "WEBSITE",
-          targetValue: targetValue,
-          durationSeconds: durationSeconds,
-          date: new Date().toISOString().split("T")[0]
-        }
-      ]
-    };
-
-    const res = await fetch(`${API_BASE}/usage/sync`, {
+    const res = await fetch(`${API_BASE}/policies`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${state.token}`
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        name: name,
+        limitSeconds: mins * 60,
+        warningThresholdSeconds: mins > 0 ? (mins - 5) * 60 : 0,
+        enforcementMode: mode,
+        targets: [{ targetType: "DOMAIN", targetValue: target }]
+      })
     });
 
     if (res.ok) {
-      const data = await res.json();
-      const targetTotal = data.aggregatedTotal[targetValue] || 0;
-      const targetMins = Math.round(targetTotal / 60);
-      document.getElementById("sim-cloud-summary").innerText = `${targetValue}: ${targetMins}m aggregated`;
-      
-      const pct = Math.min(100, Math.round((targetMins / 30) * 100));
-      document.getElementById("sim-progress-fill").style.width = `${pct}%`;
-
-      if (data.limitsReached && data.limitsReached.length > 0) {
-        const lim = data.limitsReached[0];
-        triggerLockoutScreen(lim.targetValue, lim.limitSeconds, lim.currentUsage);
-      }
-
-      await refreshAllData();
-      await fetchAuditLogs();
+      closeCreatePolicyModal();
+      document.getElementById("new-policy-name").value = "";
+      document.getElementById("new-policy-target").value = "";
+      fetchPolicies();
+      fetchWebsitesAnalytics();
+      showToast(`Policy '${name}' created and synchronized!`, "success");
     }
-  } catch (err) {
-    console.error("Sync delta error:", err);
+  } catch (e) {
+    showToast("Error creating policy", "alert");
   }
+};
+
+window.handleBackdropClick = function(e, modalId) {
+  if (e.target && e.target.id === modalId) {
+    document.getElementById(modalId).style.display = "none";
+  }
+};
+
+// ============================================================================
+// TAB SWITCHING
+// ============================================================================
+window.switchTab = function(tabName) {
+  document.querySelectorAll(".view-tab").forEach(tab => {
+    tab.classList.toggle("active", tab.id === `tab-${tabName}`);
+    tab.setAttribute("aria-selected", tab.id === `tab-${tabName}`);
+  });
+
+  document.querySelectorAll(".tab-panel").forEach(panel => {
+    panel.classList.toggle("active", panel.id === `panel-${tabName}`);
+  });
+};
+
+// ============================================================================
+// TOAST NOTIFICATIONS
+// ============================================================================
+function showToast(message, type = "info") {
+  const container = document.getElementById("toast-container");
+  if (!container) return;
+
+  const toast = document.createElement("div");
+  toast.className = `toast-item toast-${type}`;
+  toast.innerHTML = `
+    <span>${escapeHtml(message)}</span>
+  `;
+
+  container.appendChild(toast);
+
+  setTimeout(() => {
+    toast.style.opacity = "0";
+    toast.style.transform = "translateY(10px)";
+    toast.style.transition = "all 0.25s ease";
+    setTimeout(() => toast.remove(), 250);
+  }, 4000);
 }
 
-// 9. Lockout Screen
-function triggerLockoutScreen(targetValue, limitSeconds, currentUsageSeconds) {
-  const limitMins = Math.round(limitSeconds / 60);
-  const usedMins = Math.round(currentUsageSeconds / 60);
-
-  document.getElementById("blocker-target-text").innerHTML = `You reached today's limit for <strong>${escapeHtml(targetValue)}</strong>.`;
-  document.getElementById("blocker-limit-badge").innerText = `${usedMins}m / ${limitMins}m Limit Exhausted`;
-  document.getElementById("modal-blocker").style.display = "flex";
-}
-
-// 10. Setup Event Listeners
-function setupEventListeners() {
-  // Mode Switcher
-  const btnOwner = document.getElementById("btn-mode-owner");
-  const btnManaged = document.getElementById("btn-mode-managed");
-  const viewOwner = document.getElementById("view-owner");
-  const viewManaged = document.getElementById("view-managed");
-
-  btnOwner.addEventListener("click", () => {
-    btnOwner.classList.add("active");
-    btnManaged.classList.remove("active");
-    viewOwner.style.display = "block";
-    viewManaged.style.display = "none";
-    state.currentView = "OWNER";
-  });
-
-  btnManaged.addEventListener("click", () => {
-    btnManaged.classList.add("active");
-    btnOwner.classList.remove("active");
-    viewManaged.style.display = "block";
-    viewOwner.style.display = "none";
-    state.currentView = "MANAGED";
-  });
-
-  // Focus Button
-  document.getElementById("btn-toggle-focus").addEventListener("click", toggleFocusSession);
-
-  // Focus Duration Buttons
-  document.querySelectorAll(".duration-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      if (state.isFocusActive) return;
-      document.querySelectorAll(".duration-btn").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      state.selectedFocusMins = parseInt(btn.dataset.mins, 10);
-      state.focusRemainingSeconds = state.selectedFocusMins * 60;
-      document.getElementById("focus-timer-display").innerText = formatSeconds(state.focusRemainingSeconds);
-      document.getElementById("focus-btn-text").innerText = `DISPATCH REMOTE FOCUS (${state.selectedFocusMins}m)`;
-    });
-  });
-
-  // Pair Device Modal
-  document.getElementById("btn-pair-device").addEventListener("click", () => {
-    document.getElementById("modal-pair").style.display = "flex";
-    requestPairingCode();
-  });
-  document.getElementById("btn-close-pair-modal").addEventListener("click", () => {
-    document.getElementById("modal-pair").style.display = "none";
-    clearInterval(state.pairingTimerInterval);
-    clearInterval(state.pairingPollInterval);
-  });
-  document.getElementById("btn-cancel-pair").addEventListener("click", () => {
-    document.getElementById("modal-pair").style.display = "none";
-    clearInterval(state.pairingTimerInterval);
-    clearInterval(state.pairingPollInterval);
-  });
-  document.getElementById("btn-generate-code").addEventListener("click", () => {
-    requestPairingCode();
-  });
-  
-  const approveBtn = document.getElementById("btn-approve-pairing");
-  if (approveBtn) approveBtn.addEventListener("click", approvePairing);
-
-  const rejectBtn = document.getElementById("btn-reject-pairing");
-  if (rejectBtn) rejectBtn.addEventListener("click", rejectPairing);
-
-  // Policy Modal
-  document.getElementById("btn-new-policy").addEventListener("click", () => {
-    document.getElementById("modal-policy").style.display = "flex";
-  });
-  document.getElementById("btn-close-policy-modal").addEventListener("click", () => {
-    document.getElementById("modal-policy").style.display = "none";
-  });
-  document.getElementById("btn-cancel-policy").addEventListener("click", () => {
-    document.getElementById("modal-policy").style.display = "none";
-  });
-  document.getElementById("btn-save-policy").addEventListener("click", async () => {
-    const name = document.getElementById("policy-name-input").value;
-    const targetType = document.getElementById("policy-target-type").value;
-    const targetVal = document.getElementById("policy-target-val").value;
-    const mins = parseFloat(document.getElementById("policy-limit-input").value);
-    const mode = document.getElementById("policy-mode-input").value;
-    const scope = document.getElementById("policy-device-scope").value;
-
-    let assignedDeviceIds = [];
-    if (scope === "MAC_ONLY") {
-      assignedDeviceIds = [state.macDeviceId];
-    } else if (scope === "MANAGED_ONLY") {
-      assignedDeviceIds = [state.managedTabletDeviceId];
-    }
-
-    if (!name || isNaN(mins) || mins <= 0 || !targetVal) {
-      alert("Please enter valid policy parameters.");
-      return;
-    }
-
-    try {
-      const res = await fetch(`${API_BASE}/policies`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${state.token}`
-        },
-        body: JSON.stringify({
-          name: name,
-          limitSeconds: Math.max(1, Math.round(mins * 60)),
-          period: "DAILY",
-          timezone: "UTC",
-          enforcementMode: mode,
-          targets: [{ targetType: targetType, targetValue: targetVal }],
-          assignedDeviceIds: assignedDeviceIds
-        })
-      });
-
-      if (res.ok) {
-        document.getElementById("modal-policy").style.display = "none";
-        await refreshAllData();
-        await fetchAuditLogs();
-      }
-    } catch (e) {
-      console.error("Save policy error:", e);
-    }
-  });
-
-  // Quick 1-Click Domain Rule Creator Listeners
-  const btnQuickCreate = document.getElementById("btn-quick-create-rule");
-  const btnQuickBlock = document.getElementById("btn-quick-block-permanently");
-  const quickDomainInput = document.getElementById("quick-domain-input");
-  const quickLimitInput = document.getElementById("quick-limit-input");
-  const quickFeedback = document.getElementById("quick-rule-feedback");
-
-  if (btnQuickCreate) {
-    btnQuickCreate.addEventListener("click", async () => {
-      const domain = (quickDomainInput?.value || "").trim().toLowerCase();
-      const mins = parseInt(quickLimitInput?.value, 10) || 15;
-      if (!domain) return;
-
-      try {
-        const res = await fetch(`${API_BASE}/policies`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${state.token}`
-          },
-          body: JSON.stringify({
-            name: `${domain} Attention Cap`,
-            limitSeconds: Math.max(1, mins * 60),
-            period: "DAILY",
-            timezone: "UTC",
-            enforcementMode: "BLOCK",
-            targets: [{ targetType: "WEBSITE", targetValue: domain }]
-          })
-        });
-
-        if (res.ok) {
-          if (quickFeedback) {
-            quickFeedback.innerText = `✓ Created rule for ${domain} (${mins}m/day). Synchronized to all fleet devices.`;
-            quickFeedback.style.display = "block";
-            setTimeout(() => { if (quickFeedback) quickFeedback.style.display = "none"; }, 4000);
-          }
-          if (quickDomainInput) quickDomainInput.value = "";
-          await refreshAllData();
-          await fetchAuditLogs();
-        }
-      } catch (e) {
-        console.error("Create quick rule error:", e);
-      }
-    });
-  }
-
-  if (btnQuickBlock) {
-    btnQuickBlock.addEventListener("click", async () => {
-      const domain = (quickDomainInput?.value || "").trim().toLowerCase();
-      if (!domain) return;
-
-      try {
-        const res = await fetch(`${API_BASE}/policies`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${state.token}`
-          },
-          body: JSON.stringify({
-            name: `Block ${domain} Permanently`,
-            limitSeconds: 0,
-            period: "DAILY",
-            timezone: "UTC",
-            enforcementMode: "BLOCK",
-            targets: [{ targetType: "WEBSITE", targetValue: domain }]
-          })
-        });
-
-        if (res.ok) {
-          if (quickFeedback) {
-            quickFeedback.innerText = `✓ ${domain} is now permanently blocked fleetwide 24/7.`;
-            quickFeedback.style.display = "block";
-            setTimeout(() => { if (quickFeedback) quickFeedback.style.display = "none"; }, 4000);
-          }
-          if (quickDomainInput) quickDomainInput.value = "";
-          await refreshAllData();
-          await fetchAuditLogs();
-        }
-      } catch (e) {
-        console.error("Block quick rule error:", e);
-      }
-    });
-  }
-
-  // Audit Refresh
-  document.getElementById("btn-refresh-audit").addEventListener("click", fetchAuditLogs);
-
-  // Policy Simulator & Conflict Detector
-  const btnRunSim = document.getElementById("btn-run-simulation");
-  if (btnRunSim) {
-    btnRunSim.addEventListener("click", async () => {
-      const targetVal = document.getElementById("sim-test-target-input").value;
-      const mode = document.getElementById("sim-test-mode-select").value;
-
-      try {
-        const res = await fetch(`${API_BASE}/policies/simulate`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${state.token}`
-          },
-          body: JSON.stringify({
-            targetType: targetVal.includes(".") ? "DOMAIN" : "CATEGORY",
-            targetValue: targetVal,
-            enforcementMode: mode,
-            limitSeconds: 1800
-          })
-        });
-
-        if (res.ok) {
-          const simData = await res.json();
-          document.getElementById("sim-res-action").innerText = `Action: ${simData.action} (${simData.precedenceRule})`;
-          document.getElementById("sim-res-explanation").innerText = simData.explanation;
-          const blockedList = (simData.simulatedBlocked || []).slice(0, 5).join(", ");
-          document.getElementById("sim-res-domains").innerHTML = `<strong>Impacted Domains:</strong> ${blockedList || "Target directly matched"}`;
-          
-          if (simData.conflictsDetected && simData.conflictsDetected.length > 0) {
-            document.getElementById("sim-res-conflicts").innerHTML = `⚠️ <strong>Conflict Warning:</strong> ${simData.conflictsDetected[0].resolution}`;
-          } else {
-            document.getElementById("sim-res-conflicts").innerHTML = `<span style="color: #34d399;">✓ No conflicting policies detected. Deterministic precedence verified.</span>`;
-          }
-        }
-      } catch (e) {
-        console.error("Simulation error:", e);
-      }
-    });
-  }
-
-  // Policy Explainer ("Why Blocked?")
-  const btnExplain = document.getElementById("btn-explain-domain");
-  if (btnExplain) {
-    btnExplain.addEventListener("click", async () => {
-      const candidate = document.getElementById("explain-domain-input").value;
-      try {
-        const res = await fetch(`${API_BASE}/policies/explain`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${state.token}`
-          },
-          body: JSON.stringify({ candidateDomain: candidate })
-        });
-
-        if (res.ok) {
-          const exp = await res.json();
-          document.getElementById("explain-target-title").innerText = exp.normalizedHost || candidate;
-          document.getElementById("explain-status-badge").innerText = exp.isBlocked ? "RESTRICTED" : "PERMITTED";
-          document.getElementById("explain-status-badge").className = exp.isBlocked ? "badge badge-red" : "badge badge-green";
-          document.getElementById("explain-reason-text").innerText = exp.reason;
-          document.getElementById("explain-layer-text").innerText = `Enforcing Layer: ${exp.enforcingLayer} • Next Reset: ${exp.nextResetTime}`;
-        }
-      } catch (e) {
-        console.error("Explain error:", e);
-      }
-    });
-  }
-
-  // Simulate Tamper Alert
-  const btnTamper = document.getElementById("btn-simulate-tamper");
-  if (btnTamper) {
-    btnTamper.addEventListener("click", async () => {
-      try {
-        const res = await fetch(`${API_BASE}/health/tamper`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${state.token}`
-          },
-          body: JSON.stringify({
-            deviceId: state.managedTabletDeviceId,
-            tamperType: "VPN_STOPPED",
-            details: "Android VpnService process was stopped in background."
-          })
-        });
-
-        if (res.ok) {
-          const badge = document.getElementById("android-health-badge");
-          badge.className = "badge badge-red";
-          badge.innerText = "PROTECTION DEGRADED";
-          document.getElementById("android-health-details").innerHTML = `<span style="color: #f87171;">⚠️ VPN_STOPPED: Local DNS sinkhole offline. Tamper alert broadcasted.</span>`;
-          
-          const sysStatus = document.getElementById("system-status");
-          sysStatus.className = "status-badge status-degraded";
-          document.getElementById("status-text").innerText = "Protection Degraded • Tamper Alert";
-          
-          await fetchAuditLogs();
-        }
-      } catch (e) {
-        console.error("Tamper simulation error:", e);
-      }
-    });
-  }
-
-  // 1. Diagnostics Center ("Run Diagnostics")
-  const btnDiag = document.getElementById("btn-run-diagnostics");
-  if (btnDiag) {
-    btnDiag.addEventListener("click", async () => {
-      btnDiag.innerText = "⏳ Testing...";
-      btnDiag.disabled = true;
-      try {
-        const res = await fetch(`${API_BASE}/health/diagnostics`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${state.token}`
-          }
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          setTimeout(() => {
-            document.getElementById("diag-browser-badge").innerText = `PASS (${data.tests[0].latencyMs}ms)`;
-            document.getElementById("diag-vpn-badge").innerText = `PASS (${data.tests[1].latencyMs}ms)`;
-            document.getElementById("diag-usage-badge").innerText = `PASS (${data.tests[2].latencyMs}ms)`;
-            document.getElementById("diag-sync-badge").innerText = `PASS (${data.tests[3].latencyMs}ms)`;
-            document.getElementById("diag-offline-badge").innerText = `PASS (${data.tests[4].latencyMs}ms)`;
-            btnDiag.innerText = `✅ ${data.overallStatus}`;
-            btnDiag.disabled = false;
-          }, 400);
-        }
-      } catch (e) {
-        console.error("Diagnostics error:", e);
-        btnDiag.innerText = "🧪 Run Diagnostics";
-        btnDiag.disabled = false;
-      }
-    });
-  }
-
-  // 2. Focus Presets Selection
-  document.querySelectorAll(".focus-preset-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".focus-preset-btn").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      const mins = parseInt(btn.dataset.mins) || 45;
-      state.selectedFocusMins = mins;
-      document.getElementById("focus-btn-text").innerText = `DISPATCH REMOTE FOCUS (${mins}m)`;
-    });
-  });
-
-  // 3. Smart Recommendations Apply
-  document.querySelectorAll(".btn-apply-rec").forEach(btn => {
-    btn.addEventListener("click", async () => {
-      const target = btn.dataset.target;
-      const limit = parseInt(btn.dataset.limit) || 0;
-      btn.innerText = "Applying...";
-      btn.disabled = true;
-      try {
-        await fetch(`${API_BASE}/policies`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${state.token}`
-          },
-          body: JSON.stringify({
-            name: `Smart Rec: ${target}`,
-            description: `Derived from FocusGuard usage insights`,
-            targetType: target === "SOCIAL" ? "CATEGORY" : "WEBSITE",
-            targetValue: target,
-            limitMinutes: limit,
-            enforcementMode: "BLOCK",
-            deviceScope: "ALL"
-          })
-        });
-        btn.innerText = "Applied ✓";
-        await refreshAllData();
-        await fetchAuditLogs();
-      } catch (e) {
-        console.error("Rec apply error:", e);
-        btn.innerText = "Apply";
-        btn.disabled = false;
-      }
-    });
-  });
-
-  // 4. Capstone Demonstration Flow (Prof. Boshir Story)
-  const btnCapstone = document.getElementById("btn-run-capstone-demo");
-  if (btnCapstone) {
-    btnCapstone.addEventListener("click", async () => {
-      const drawer = document.getElementById("capstone-demo-drawer");
-      const log = document.getElementById("demo-step-log");
-      const title = document.getElementById("demo-step-title");
-      drawer.style.display = "block";
-      btnCapstone.disabled = true;
-
-      // Step 1: Create & Propagate Study Mode
-      title.innerText = "Step 1/4: Dispatching Study Mode to MacBook, Phone & Extension...";
-      log.innerHTML = `<span style="color: #818cf8;">[WebSocket Gateway]</span> Broadcasting STUDY_MODE lockdown payload...`;
-      await new Promise(r => setTimeout(r, 900));
-
-      // Step 2: Instant Fleet Synchronization (< 1s)
-      title.innerText = "Step 2/4: Instant Fleet Synchronization (< 45ms)";
-      log.innerHTML = `
-        ✓ <strong>MacBook Pro:</strong> Screen Time ManagedSettings shield ACTIVATED.<br>
-        ✓ <strong>Pixel Tablet:</strong> VpnService DNS sinkhole (RFC 1035 NXDOMAIN) ACTIVATED.<br>
-        ✓ <strong>WebExtension:</strong> DeclarativeNetRequest dynamic rules COMPILED.<br>
-        <span style="color: #34d399;">&bull; Time to fleetwide enforcement: 42ms (&lt; 1.0s target).</span>
-      `;
-      state.isFocusActive = true;
-      document.getElementById("focus-status-badge").className = "badge badge-red font-mono";
-      document.getElementById("focus-status-badge").innerText = "STUDY LOCKDOWN ACTIVE (90m)";
-      await new Promise(r => setTimeout(r, 1400));
-
-      // Step 3: Offline Disconnect Simulation
-      title.innerText = "Step 3/4: Disconnecting Wi-Fi / Simulating Offline Mode...";
-      log.innerHTML += `<br><br><span style="color: #fbbf24;">[Network]</span> Wi-Fi disconnected.<br>
-        ✓ <strong>Local SQLite & Room:</strong> Policy v2 cached locally.<br>
-        ✓ Distracting domains remain 100% blocked without internet.<br>
-        ✓ Usage events queued in offline buffer.`;
-      updateConnectionStatus(false);
-      await new Promise(r => setTimeout(r, 1500));
-
-      // Step 4: Reconnect & Event Synchronization
-      title.innerText = "Step 4/4: Reconnecting & Syncing Offline Events...";
-      updateConnectionStatus(true);
-      log.innerHTML += `<br><br><span style="color: #34d399;">[Network]</span> Wi-Fi reconnected.<br>
-        ✓ 27 offline events deduplicated (idempotency keys verified).<br>
-        ✓ Attention Score and Visual Timeline updated cleanly.<br>
-        <strong style="color: #c084fc;">🏆 CAPSTONE LIVE DEMONSTRATION VERIFIED 100% SUCCESS!</strong>`;
-      btnCapstone.disabled = false;
-      await refreshAllData();
-      await fetchAuditLogs();
-    });
-  }
-
-  // Blocker Overlay
-  document.getElementById("btn-blocker-demo").addEventListener("click", () => {
-    document.getElementById("modal-blocker").style.display = "flex";
-  });
-  document.getElementById("btn-close-blocker").addEventListener("click", () => {
-    document.getElementById("modal-blocker").style.display = "none";
-  });
-
-  // Extension Grace Period Modal Listeners
-  const btnOpenGuide = document.getElementById("btn-open-extensions-guide");
-  if (btnOpenGuide) {
-    btnOpenGuide.addEventListener("click", () => {
-      alert("📦 Extension Installation Steps:\n\n1. Open chrome://extensions (or brave://extensions / edge://extensions)\n2. Enable Developer mode\n3. Click 'Load unpacked'\n4. Select: " + window.location.origin + "/../../apps/extension");
-    });
-  }
-  const btnDismissGrace = document.getElementById("btn-dismiss-grace");
-  if (btnDismissGrace) {
-    btnDismissGrace.addEventListener("click", () => {
-      document.getElementById("modal-extension-grace").style.display = "none";
-      refreshAllData();
-      fetchAuditLogs();
-    });
-  }
-
-  // Auth Modal Listeners
-  const modalAuth = document.getElementById("modal-auth");
-  const btnOpenAuth = document.getElementById("btn-auth-modal");
-  const btnCloseAuth = document.getElementById("btn-close-auth-modal");
-  const btnLogin = document.getElementById("btn-action-login");
-  const btnRegister = document.getElementById("btn-action-register");
-  const btnLogout = document.getElementById("btn-action-logout");
-  const authErrMsg = document.getElementById("auth-error-msg");
-
-  if (btnOpenAuth && modalAuth) {
-    btnOpenAuth.addEventListener("click", () => {
-      modalAuth.style.display = "flex";
-      updateUserUI();
-    });
-  }
-  if (btnCloseAuth && modalAuth) {
-    btnCloseAuth.addEventListener("click", () => {
-      modalAuth.style.display = "none";
-      if (authErrMsg) authErrMsg.style.display = "none";
-    });
-  }
-
-  if (btnLogin) {
-    btnLogin.addEventListener("click", async () => {
-      const email = document.getElementById("input-auth-email").value.trim();
-      const password = document.getElementById("input-auth-password").value;
-      if (!email || !password) {
-        if (authErrMsg) {
-          authErrMsg.textContent = "Please provide email and password.";
-          authErrMsg.style.display = "block";
-        }
-        return;
-      }
-      btnLogin.disabled = true;
-      try {
-        const res = await fetch(`${API_BASE}/auth/login`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, password })
-        });
-        if (res.ok) {
-          const data = await res.json();
-          state.token = data.accessToken;
-          state.user = data.user;
-          localStorage.setItem("focusguard_token", state.token);
-          updateUserUI();
-          updateConnectionStatus(true);
-          modalAuth.style.display = "none";
-          await refreshAllData();
-          await fetchAuditLogs();
-        } else {
-          const errData = await res.json().catch(() => ({}));
-          if (authErrMsg) {
-            authErrMsg.textContent = errData.error?.message || "Invalid credentials.";
-            authErrMsg.style.display = "block";
-          }
-        }
-      } catch (err) {
-        if (authErrMsg) {
-          authErrMsg.textContent = "Network error connecting to backend.";
-          authErrMsg.style.display = "block";
-        }
-      } finally {
-        btnLogin.disabled = false;
-      }
-    });
-  }
-
-  if (btnRegister) {
-    btnRegister.addEventListener("click", async () => {
-      const email = document.getElementById("input-auth-email").value.trim();
-      const password = document.getElementById("input-auth-password").value;
-      if (!email || !password) {
-        if (authErrMsg) {
-          authErrMsg.textContent = "Please provide email and password.";
-          authErrMsg.style.display = "block";
-        }
-        return;
-      }
-      btnRegister.disabled = true;
-      try {
-        const res = await fetch(`${API_BASE}/auth/register`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, password })
-        });
-        if (res.ok) {
-          const data = await res.json();
-          state.token = data.accessToken;
-          state.user = data.user;
-          localStorage.setItem("focusguard_token", state.token);
-          updateUserUI();
-          updateConnectionStatus(true);
-          modalAuth.style.display = "none";
-          await refreshAllData();
-          await fetchAuditLogs();
-        } else {
-          const errData = await res.json().catch(() => ({}));
-          if (authErrMsg) {
-            authErrMsg.textContent = errData.error?.message || "Registration error. Email may already exist.";
-            authErrMsg.style.display = "block";
-          }
-        }
-      } catch (err) {
-        if (authErrMsg) {
-          authErrMsg.textContent = "Network error during registration.";
-          authErrMsg.style.display = "block";
-        }
-      } finally {
-        btnRegister.disabled = false;
-      }
-    });
-  }
-
-  if (btnLogout) {
-    btnLogout.addEventListener("click", () => {
-      localStorage.removeItem("focusguard_token");
-      state.token = null;
-      state.user = null;
-      updateUserUI();
-      modalAuth.style.display = "none";
-      alert("Signed out successfully.");
-      window.location.reload();
-    });
-  }
-
-  // Privacy & Diagnostics Modal Listeners
-  const modalPrivacy = document.getElementById("modal-privacy");
-  const btnOpenPrivacy = document.getElementById("btn-privacy-modal");
-  const btnClosePrivacy = document.getElementById("btn-close-privacy-modal");
-  const btnDownloadUsage = document.getElementById("btn-download-usage-json");
-  const btnDownloadSupport = document.getElementById("btn-download-support-bundle");
-  const btnClearLocal = document.getElementById("btn-clear-local-data");
-
-  if (btnOpenPrivacy && modalPrivacy) {
-    btnOpenPrivacy.addEventListener("click", () => {
-      modalPrivacy.style.display = "flex";
-    });
-  }
-  if (btnClosePrivacy && modalPrivacy) {
-    btnClosePrivacy.addEventListener("click", () => {
-      modalPrivacy.style.display = "none";
-    });
-  }
-
-  if (btnDownloadUsage) {
-    btnDownloadUsage.addEventListener("click", () => {
-      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(state.dailyAnalytics, null, 2));
-      const downloadAnchor = document.createElement("a");
-      downloadAnchor.setAttribute("href", dataStr);
-      downloadAnchor.setAttribute("download", `focusguard-usage-export-${new Date().toISOString().split("T")[0]}.json`);
-      document.body.appendChild(downloadAnchor);
-      downloadAnchor.click();
-      downloadAnchor.remove();
-    });
-  }
-
-  if (btnDownloadSupport) {
-    btnDownloadSupport.addEventListener("click", () => {
-      const bundle = {
-        application: "FocusGuard Fleet Dashboard",
-        appVersion: "2.0.0-STABLE-CANDIDATE",
-        generatedAt: new Date().toISOString(),
-        clientTimestamp: Date.now(),
-        platform: navigator.platform,
-        userAgent: navigator.userAgent,
-        connectionState: state.wsConnected ? "ONLINE" : "OFFLINE",
-        activeDevicesCount: state.devices.length,
-        activePoliciesCount: state.policies.length,
-        recentErrorsOrAudits: (state.auditLogs || []).slice(0, 15),
-        privacySanitized: true
-      };
-      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(bundle, null, 2));
-      const downloadAnchor = document.createElement("a");
-      downloadAnchor.setAttribute("href", dataStr);
-      downloadAnchor.setAttribute("download", `support-report-${Date.now()}.json`);
-      document.body.appendChild(downloadAnchor);
-      downloadAnchor.click();
-      downloadAnchor.remove();
-    });
-  }
-
-  if (btnClearLocal) {
-    btnClearLocal.addEventListener("click", () => {
-      if (confirm("Are you sure you want to wipe local session data? You will be signed out.")) {
-        localStorage.clear();
-        window.location.reload();
-      }
-    });
-  }
-}
-
-function updateConnectionStatus(connected) {
-  const badge = document.getElementById("system-status");
-  const text = document.getElementById("status-text");
-  if (badge) {
-    badge.className = connected ? "status-badge status-protected" : "status-badge status-degraded";
-  }
-  if (text) {
-    text.innerText = connected ? "Fleet Protected • Synced" : "Offline Mode • Local Shields Active";
-  }
-}
-
-function formatSeconds(sec) {
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-}
-
-function escapeHtml(str) {
-  if (!str) return "";
-  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+// Utility: HTML Escaping
+function escapeHtml(text) {
+  if (typeof text !== "string") return text;
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }

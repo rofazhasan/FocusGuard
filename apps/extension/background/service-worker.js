@@ -366,17 +366,19 @@ async function connectWebSocket() {
 
     wsConnection.onmessage = async (msg) => {
       try {
-        const payload = JSON.parse(msg.data);
-        console.log('[FocusGuard Extension] WS event received:', payload);
+        const raw = JSON.parse(msg.data);
+        console.log('[FocusGuard Extension] WS event received:', raw);
+        const eventName = raw.event || raw.type;
+        const data = raw.payload || raw;
 
-        if (payload.type === 'POLICY_UPDATED') {
+        if (eventName === 'POLICY_UPDATED' || eventName === 'POLICY_CREATED' || eventName === 'POLICY_DELETED') {
           await fetchPoliciesFromServer();
-        } else if (payload.type === 'FOCUS_SESSION_STARTED') {
+        } else if (eventName === 'FOCUS_STARTED' || eventName === 'FOCUS_SESSION_STARTED') {
           policyEngine.setFocusSession({
             isActive: true,
-            name: payload.name || 'Remote Focus Session',
-            durationMinutes: payload.durationMinutes || 45,
-            allowedDomains: payload.allowedDomains || ['github.com', 'stackoverflow.com']
+            name: data.name || 'Remote Focus Session',
+            durationMinutes: data.durationMinutes || 45,
+            allowedDomains: data.allowedDomains || ['github.com', 'stackoverflow.com']
           });
           await policyCache.setFocusSession(policyEngine.focusSession);
           if (sessionTracker.currentTabId && sessionTracker.currentDomain) {
@@ -385,13 +387,13 @@ async function connectWebSocket() {
               redirectToBlockPage(sessionTracker.currentTabId, sessionTracker.currentDomain, evalResult);
             }
           }
-        } else if (payload.type === 'FOCUS_SESSION_ENDED') {
+        } else if (eventName === 'FOCUS_ENDED' || eventName === 'FOCUS_SESSION_ENDED') {
           policyEngine.setFocusSession(null);
           await policyCache.setFocusSession(null);
-        } else if (payload.type === 'LIMIT_REACHED') {
-          policyEngine.updateUsage(payload.targetValue, payload.limitSeconds || 1800);
+        } else if (eventName === 'LIMIT_REACHED') {
+          policyEngine.updateUsage(data.targetValue, data.limitSeconds || 1800);
           if (sessionTracker.currentTabId && sessionTracker.currentDomain && 
-              DomainMatcher.isDomainMatch(sessionTracker.currentDomain, payload.targetValue)) {
+              DomainMatcher.isDomainMatch(sessionTracker.currentDomain, data.targetValue)) {
             const evalResult = policyEngine.evaluate(sessionTracker.currentDomain);
             redirectToBlockPage(sessionTracker.currentTabId, sessionTracker.currentDomain, evalResult);
           }

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -14,9 +15,51 @@ import (
 	"github.com/focusguard/focusguard/backend/pkg/logger"
 )
 
+const (
+	// writeWait is the time allowed to write a message to the peer.
+	writeWait = 10 * time.Second
+
+	// pongWait is the time allowed to read the next pong message from the peer.
+	pongWait = 60 * time.Second
+
+	// pingPeriod is the period to send pings to peer. Must be less than pongWait.
+	pingPeriod = (pongWait * 9) / 10
+
+	// maxMessageSize is the maximum message size allowed from peer (512KB).
+	maxMessageSize = 512 * 1024
+)
+
 var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all cross-device clients
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // Native apps (macOS, Android TUN, CLI) do not send Origin
+		}
+		// Allow browser extension runtimes
+		if strings.HasPrefix(origin, "chrome-extension://") || strings.HasPrefix(origin, "moz-extension://") {
+			return true
+		}
+		// Allow local development endpoints
+		if strings.HasPrefix(origin, "http://localhost") || strings.HasPrefix(origin, "http://127.0.0.1") ||
+			strings.HasPrefix(origin, "https://localhost") || strings.HasPrefix(origin, "https://127.0.0.1") {
+			return true
+		}
+		// Allow configured production origins
+		allowed := os.Getenv("ALLOWED_ORIGINS")
+		if allowed != "" {
+			for _, o := range strings.Split(allowed, ",") {
+				if strings.TrimSpace(o) == origin {
+					return true
+				}
+			}
+		}
+		// Allow all only in non-production environments
+		if os.Getenv("ENV") != "production" {
+			return true
+		}
+		return false
 	},
 }
 
@@ -26,10 +69,17 @@ type EventMessage struct {
 }
 
 type Client struct {
-	UserID   uuid.UUID
-	DeviceID uuid.UUID
-	Conn     *websocket.Conn
-	Send     chan EventMessage
+	UserID    uuid.UUID
+	DeviceID  uuid.UUID
+	Conn      *websocket.Conn
+	Send      chan EventMessage
+	closeOnce sync.Once
+}
+
+func (c *Client) Close() {
+	c.closeOnce.Do(func() {
+		_ = c.Conn.Close()
+	})
 }
 
 type Hub struct {
@@ -43,8 +93,8 @@ type Hub struct {
 		UserID  uuid.UUID
 		Message EventMessage
 	}
-	db                     *sql.DB
-	mu                     sync.Mutex
+	db *sql.DB
+	mu sync.Mutex
 }
 
 func NewHub() *Hub {
@@ -53,12 +103,12 @@ func NewHub() *Hub {
 		userMap:                make(map[uuid.UUID]map[*Client]bool),
 		deviceMap:              make(map[uuid.UUID]map[*Client]bool),
 		lastExtensionHeartbeat: make(map[uuid.UUID]time.Time),
-		register:               make(chan *Client),
-		unregister:             make(chan *Client),
+		register:               make(chan *Client, 64),
+		unregister:             make(chan *Client, 64),
 		broadcast: make(chan struct {
 			UserID  uuid.UUID
 			Message EventMessage
-		}),
+		}, 256),
 	}
 }
 
@@ -143,6 +193,7 @@ func (h *Hub) Run() {
 						close(client.Send)
 						delete(h.clients, client)
 						delete(clients, client)
+						client.Close()
 					}
 				}
 			}
@@ -164,6 +215,7 @@ func (h *Hub) DisconnectDevice(deviceID uuid.UUID) {
 
 	if clients, exists := h.deviceMap[deviceID]; exists {
 		for client := range clients {
+			_ = client.Conn.SetWriteDeadline(time.Now().Add(writeWait))
 			_ = client.Conn.WriteJSON(EventMessage{
 				Event: "DEVICE_REVOKED",
 				Payload: map[string]interface{}{
@@ -171,7 +223,7 @@ func (h *Hub) DisconnectDevice(deviceID uuid.UUID) {
 					"message":  "Device access permanently revoked by owner",
 				},
 			})
-			_ = client.Conn.Close()
+			client.Close()
 			delete(h.clients, client)
 			if uClients, uExists := h.userMap[client.UserID]; uExists {
 				delete(uClients, client)
@@ -187,20 +239,31 @@ func (h *Hub) ServeWS(tokenService *auth.TokenService, db *sql.DB, w http.Respon
 		tokenStr = r.Header.Get("Sec-WebSocket-Protocol")
 	}
 
+	isProd := os.Getenv("ENV") == "production" || os.Getenv("NODE_ENV") == "production"
+
 	var claims *auth.Claims
 	var err error
 	if tokenStr != "" {
 		claims, err = tokenService.ValidateToken(tokenStr)
-		if err != nil && (strings.HasPrefix(tokenStr, "FG-") || strings.HasPrefix(tokenStr, "ext_")) {
-			claims = nil // Allow fallback to demo user
-		} else if err != nil {
-			http.Error(w, `{"error":"Invalid or expired token"}`, http.StatusUnauthorized)
-			return
+		if err != nil {
+			if !isProd && (strings.HasPrefix(tokenStr, "FG-") || strings.HasPrefix(tokenStr, "ext_")) {
+				claims = nil // Allow fallback to demo user in local development only
+			} else {
+				http.Error(w, `{"error":"Invalid or expired token"}`, http.StatusUnauthorized)
+				return
+			}
 		}
+	} else if isProd {
+		http.Error(w, `{"error":"Authorization token required"}`, http.StatusUnauthorized)
+		return
 	}
 
-	// Fallback to default owner user for zero-friction local extension connection
+	// Fallback to default owner user ONLY for local non-production development
 	if claims == nil {
+		if isProd {
+			http.Error(w, `{"error":"Unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
 		defaultUserID := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 		claims = &auth.Claims{
 			UserID: defaultUserID,
@@ -236,15 +299,22 @@ func (h *Hub) ServeWS(tokenService *auth.TokenService, db *sql.DB, w http.Respon
 
 	h.register <- client
 
-	go client.writePump()
+	go client.writePump(h)
 	go client.readPump(h)
 }
 
 func (c *Client) readPump(h *Hub) {
 	defer func() {
 		h.unregister <- c
-		c.Conn.Close()
+		c.Close()
 	}()
+
+	c.Conn.SetReadLimit(maxMessageSize)
+	_ = c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.Conn.SetPongHandler(func(string) error {
+		_ = c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
 
 	for {
 		_, msg, err := c.Conn.ReadMessage()
@@ -269,26 +339,49 @@ func (c *Client) readPump(h *Hub) {
 					if targetID == "" {
 						targetID = "5028eea4-8da8-431a-91c7-d637a6837f9f"
 					}
-					_, _ = db.Exec(`INSERT INTO devices (id, user_id, device_name, platform, client_type, status, role, policy_version, created_at, updated_at)
-					                VALUES ($1, $2, 'Google Chrome Extension', 'WEB_EXTENSION', 'EXTENSION', 'ACTIVE', 'MANAGED', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+					_, err := db.Exec(`INSERT INTO devices (id, user_id, device_name, platform, client_type, os_version, status, role, policy_version, created_at, updated_at)
+					                VALUES ($1, $2, 'Google Chrome Extension', 'WEB_EXTENSION', 'EXTENSION', 'Chrome MV3', 'ACTIVE', 'MANAGED', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 					                ON CONFLICT(id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP, status = 'ACTIVE'`,
 						targetID, c.UserID.String())
+					if err != nil {
+						logger.Error("Failed to register/update extension device", "error", err)
+					}
 				}
 			}
 		}
 	}
 }
 
-func (c *Client) writePump() {
-	defer c.Conn.Close()
+func (c *Client) writePump(h *Hub) {
+	ticker := time.NewTicker(pingPeriod)
+	defer func() {
+		ticker.Stop()
+		c.Close()
+	}()
 
-	for msg := range c.Send {
-		data, err := json.Marshal(msg)
-		if err != nil {
-			continue
-		}
-		if err := c.Conn.WriteMessage(websocket.TextMessage, data); err != nil {
-			break
+	for {
+		select {
+		case msg, ok := <-c.Send:
+			_ = c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if !ok {
+				// Hub closed the channel
+				_ = c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+
+			data, err := json.Marshal(msg)
+			if err != nil {
+				continue
+			}
+			if err := c.Conn.WriteMessage(websocket.TextMessage, data); err != nil {
+				return
+			}
+
+		case <-ticker.C:
+			_ = c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
 		}
 	}
 }

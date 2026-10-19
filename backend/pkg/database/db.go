@@ -302,7 +302,7 @@ func initPostgresSchema(db *sql.DB) error {
 		platform VARCHAR(20) NOT NULL,
 		os_version VARCHAR(50) NOT NULL,
 		role VARCHAR(20) NOT NULL DEFAULT 'PERSONAL',
-		is_managed BOOLEAN NOT NULL DEFAULT FALSE,
+		is_managed INT NOT NULL DEFAULT 0,
 		status VARCHAR(20) NOT NULL DEFAULT 'ONLINE',
 		policy_version INT NOT NULL DEFAULT 1,
 		last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -316,7 +316,7 @@ func initPostgresSchema(db *sql.DB) error {
 		device_name VARCHAR(100) NOT NULL,
 		target_role VARCHAR(20) NOT NULL DEFAULT 'MANAGED_USER',
 		expires_at TIMESTAMPTZ NOT NULL,
-		is_claimed BOOLEAN NOT NULL DEFAULT FALSE,
+		is_claimed INT NOT NULL DEFAULT 0,
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);
 
@@ -329,7 +329,7 @@ func initPostgresSchema(db *sql.DB) error {
 		schedule_cron VARCHAR(100),
 		timezone VARCHAR(50) NOT NULL DEFAULT 'UTC',
 		enforcement_mode VARCHAR(30) NOT NULL DEFAULT 'BLOCK',
-		is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+		is_enabled INT NOT NULL DEFAULT 1,
 		version INT NOT NULL DEFAULT 1,
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -373,7 +373,7 @@ func initPostgresSchema(db *sql.DB) error {
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 		duration_minutes INT NOT NULL,
-		is_completed BOOLEAN NOT NULL DEFAULT FALSE,
+		is_completed INT NOT NULL DEFAULT 0,
 		started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		ended_at TIMESTAMPTZ
 	);

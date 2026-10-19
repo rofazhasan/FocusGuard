@@ -5,8 +5,29 @@ type AppUsageDto struct {
 	TargetValue  string `json:"targetValue"`
 	Category     string `json:"category"`
 	UsedMinutes  int    `json:"usedMinutes"`
+	UsedSeconds  int    `json:"usedSeconds"`
 	LimitMinutes int    `json:"limitMinutes"`
 }
+
+type WebsiteUsageDto struct {
+	Domain        string `json:"domain"`
+	TotalSeconds  int    `json:"totalSeconds"`
+	FormattedTime string `json:"formattedTime"`
+	UsedMinutes   int    `json:"usedMinutes"`
+	Category      string `json:"category"`
+	IsDistraction bool   `json:"isDistraction"`
+	PolicyName    string `json:"policyName,omitempty"`
+	LimitSeconds  int    `json:"limitSeconds,omitempty"`
+	IsExceeded    bool   `json:"isExceeded"`
+}
+
+type WebsiteAnalyticsResponse struct {
+	Date          string            `json:"date"`
+	TotalSeconds  int               `json:"totalSeconds"`
+	FormattedTime string            `json:"formattedTime"`
+	Websites      []WebsiteUsageDto `json:"websites"`
+}
+
 
 type AttentionScoreBreakdown struct {
 	OverallScore          int    `json:"overallScore"` // 0 - 100

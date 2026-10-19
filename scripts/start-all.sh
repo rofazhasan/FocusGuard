@@ -12,6 +12,11 @@ mkdir -p "$REPO_ROOT/.pids"
 
 echo -e "${BLUE}==> Starting FocusGuard Cloud API Backend (:8080)...${NC}"
 cd "$REPO_ROOT/backend"
+if [ -f ".env" ]; then
+  set -a
+  source .env
+  set +a
+fi
 if [ ! -f "bin/server" ]; then
   go build -o bin/server cmd/server/main.go
 fi
@@ -25,9 +30,8 @@ sleep 1.5
 
 echo -e "${BLUE}==> Starting FocusGuard Fleet Command Center (:3001)...${NC}"
 cd "$REPO_ROOT/apps/web"
-PORT=3001 nohup node server.js > "$REPO_ROOT/.pids/web.log" 2>&1 </dev/null &
+PORT=3001 nohup node "$REPO_ROOT/apps/web/server.js" > "$REPO_ROOT/.pids/web.log" 2>&1 </dev/null &
 WEB_PID=$!
-disown $WEB_PID 2>/dev/null || true
 echo $WEB_PID > "$REPO_ROOT/.pids/web.pid"
 
 sleep 1

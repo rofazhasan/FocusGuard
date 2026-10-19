@@ -29,7 +29,10 @@ let package = Package(
         .executableTarget(
             name: "FocusGuardApp",
             dependencies: ["FocusGuardCore"],
-            path: "FocusGuardApp"
+            path: "FocusGuardApp",
+            resources: [
+                .process("Resources")
+            ]
         ),
         .executableTarget(
             name: "FocusGuardVerificationRunner",
