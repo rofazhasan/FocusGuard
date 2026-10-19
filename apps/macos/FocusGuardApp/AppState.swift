@@ -714,16 +714,14 @@ public final class AppState: ObservableObject {
         do {
             let (data, res) = try await URLSession.shared.data(for: req)
             if let http = res as? HTTPURLResponse, http.statusCode == 200,
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let active = json["active"] as? Bool {
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let active = (json["active"] as? Bool) ?? (json["isActive"] as? Bool) ?? false
+                let session = (json["session"] as? [String: Any]) ?? json
+                let remaining = (session["remainingSeconds"] as? Int) ?? (json["remainingSeconds"] as? Int) ?? 0
+
                 await MainActor.run {
                     self.isFocusActive = active
-                    if active, let session = json["session"] as? [String: Any],
-                       let remaining = session["remainingSeconds"] as? Int {
-                        self.focusRemainingSeconds = remaining
-                    } else if !active {
-                        self.focusRemainingSeconds = 0
-                    }
+                    self.focusRemainingSeconds = active ? remaining : 0
                 }
             }
         } catch {}

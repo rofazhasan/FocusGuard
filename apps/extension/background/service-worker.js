@@ -254,6 +254,7 @@ async function initializeExtension() {
 
   // 3. Fetch fresh policies from backend
   await fetchPoliciesFromServer();
+  await checkActiveFocusFromServer();
 
   // 4. Connect real-time WebSocket hub
   await connectWebSocket();
@@ -303,6 +304,37 @@ async function fetchPoliciesFromServer() {
     }
   } catch (err) {
     console.warn('[FocusGuard Extension] Backend unreachable; operating in 100% offline cache mode.', err);
+  }
+}
+
+/**
+ * Synchronizes live active focus session state with server on boot/reconnect.
+ */
+async function checkActiveFocusFromServer() {
+  try {
+    const token = await getOrFetchAuthToken();
+    const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+    const resp = await fetch(`${API_BASE}/focus/active`, { headers, credentials: 'omit' });
+    if (resp.ok) {
+      const data = await resp.json();
+      const isActive = Boolean(data.active || data.isActive);
+      if (isActive) {
+        const session = data.session || data;
+        policyEngine.setFocusSession({
+          isActive: true,
+          name: session.name || 'Deep Work Focus Lockdown',
+          durationMinutes: session.durationMinutes || 45,
+          allowedDomains: session.allowedDomains || ['github.com', 'stackoverflow.com']
+        });
+        await policyCache.setFocusSession(policyEngine.focusSession);
+        console.log('[FocusGuard Extension] Synchronized active focus lockdown from fleet server.');
+      } else {
+        policyEngine.setFocusSession(null);
+        await policyCache.setFocusSession(null);
+      }
+    }
+  } catch (e) {
+    console.warn('[FocusGuard Extension] Could not sync active focus state on boot', e);
   }
 }
 
@@ -380,6 +412,7 @@ async function connectWebSocket() {
       }));
       startHeartbeatLoop();
       flushOfflineEvents();
+      checkActiveFocusFromServer();
     };
 
     wsConnection.onclose = () => {

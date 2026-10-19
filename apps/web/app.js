@@ -276,6 +276,25 @@ function handleIncomingEvent(msg) {
       fetchDevices();
       break;
 
+    case "EXTENSION_GRACE_TICK":
+      showToast(`⚠️ Extension Missing: ${msg.payload?.browserName || "Browser"} force-quitting in ${msg.payload?.remainingSeconds}s!`, "alert");
+      break;
+
+    case "EXTENSION_RESTORED":
+      showToast("✅ FocusGuard Extension restored across fleet!", "success");
+      fetchDevices();
+      break;
+
+    case "BROWSER_TERMINATED":
+      showToast(`🛑 ${msg.payload?.browserName || "Browser"} was force-closed: ${msg.payload?.reason || "Extension missing"}`, "alert");
+      fetchDevices();
+      break;
+
+    case "WEBSITE_USAGE_TICK":
+    case "USAGE_SYNCED":
+      refreshSilent();
+      break;
+
     case "TAMPER_ALERT":
     case "EXTENSION_MISSING_WARNING":
       showToast(`⚠️ Tamper Warning: ${msg.payload?.warning || "Protection state degraded"}`, "alert");
@@ -394,9 +413,11 @@ async function checkActiveFocus() {
     const res = await apiFetch("/focus/active");
     if (res.ok) {
       const data = await res.json();
-      if (data.active && data.session) {
-        state.activeSessionId = data.session.id;
-        applyFocusActiveState(data.session.durationMinutes, data.session.remainingSeconds);
+      const isActive = Boolean(data.active || data.isActive);
+      if (isActive) {
+        const session = data.session || data;
+        state.activeSessionId = session.id;
+        applyFocusActiveState(session.durationMinutes, session.remainingSeconds);
       } else {
         applyFocusStandbyState();
       }

@@ -149,7 +149,11 @@ func (h *Handler) GetActiveFocus(w http.ResponseWriter, r *http.Request) {
 	err := h.db.QueryRowContext(r.Context(), q, claims.UserID.String()).Scan(&id, &durationMins, &startedAt, &endsAt)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"isActive": false})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"active":   false,
+			"isActive": false,
+			"session":  nil,
+		})
 		return
 	}
 
@@ -159,18 +163,32 @@ func (h *Handler) GetActiveFocus(w http.ResponseWriter, r *http.Request) {
 	if remainingSeconds <= 0 {
 		_, _ = h.db.ExecContext(r.Context(), "UPDATE focus_sessions SET is_completed = 1 WHERE id = $1", id)
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"isActive": false, "status": "EXPIRED"})
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"active":   false,
+			"isActive": false,
+			"status":   "EXPIRED",
+			"session":  nil,
+		})
 		return
 	}
 
-	resp := FocusSessionResponse{
-		ID:               id,
-		DurationMinutes:  durationMins,
-		RemainingSeconds: remainingSeconds,
-		IsActive:         true,
-		StartedAt:        startedAt,
-		EndsAt:           endsAt,
-		BlockedTargets:   []string{"SOCIAL", "ENTERTAINMENT"},
+	resp := map[string]interface{}{
+		"active":           true,
+		"isActive":         true,
+		"id":               id,
+		"durationMinutes":  durationMins,
+		"remainingSeconds": remainingSeconds,
+		"startedAt":        startedAt,
+		"endsAt":           endsAt,
+		"blockedTargets":   []string{"SOCIAL", "ENTERTAINMENT"},
+		"session": map[string]interface{}{
+			"id":               id,
+			"durationMinutes":  durationMins,
+			"remainingSeconds": remainingSeconds,
+			"startedAt":        startedAt,
+			"endsAt":           endsAt,
+			"blockedTargets":   []string{"SOCIAL", "ENTERTAINMENT"},
+		},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
