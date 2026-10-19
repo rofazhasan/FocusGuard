@@ -12,8 +12,23 @@ public struct DashboardView: View {
                 // Top Header Banner
                 HStack(alignment: .center) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Focus Command Center")
-                            .font(.system(size: 24, weight: .bold, design: .rounded))
+                        HStack(spacing: 8) {
+                            Text("Focus Command Center")
+                                .font(.system(size: 24, weight: .bold, design: .rounded))
+
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(Color.red)
+                                    .frame(width: 7, height: 7)
+                                Text("LIVE")
+                                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                                    .foregroundColor(.red)
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.red.opacity(0.12))
+                            .cornerRadius(4)
+                        }
                         Text("Active real-time application tracking and focus policy enforcement")
                             .font(.system(size: 13))
                             .foregroundColor(.secondary)
@@ -39,6 +54,41 @@ public struct DashboardView: View {
                         }
                         .buttonStyle(.bordered)
                     }
+                }
+
+                // Extension Tamper Detection & 60-Second Grace Warning Banner
+                if appState.extensionTamperDetected {
+                    HStack(spacing: 14) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 30))
+                            .foregroundColor(.red)
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack {
+                                Text("EXTENSION TAMPER ALERT: BROWSER FORCE-CLOSE IMMINENT")
+                                    .font(.system(size: 13, weight: .heavy))
+                                    .foregroundColor(.red)
+                                Spacer()
+                                Text("\(appState.extensionGraceRemainingSeconds)s REMAINING")
+                                    .font(.system(size: 13, weight: .black, design: .monospaced))
+                                    .foregroundColor(.red)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 2)
+                                    .background(Color.red.opacity(0.18))
+                                    .cornerRadius(6)
+                            }
+                            Text("FocusGuard Extension is missing or disabled while \(appState.tamperBrowserName) is running! If not restored immediately, \(appState.tamperBrowserName) will FORCE QUIT in \(appState.extensionGraceRemainingSeconds) seconds.")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(14)
+                    .background(Color.red.opacity(0.12))
+                    .cornerRadius(10)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color.red.opacity(0.4), lineWidth: 1.5)
+                    )
                 }
 
                 if appState.isEmergencyLocked {

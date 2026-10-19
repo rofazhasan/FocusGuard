@@ -308,15 +308,29 @@ async function fetchPoliciesFromServer() {
 
 let heartbeatInterval = null;
 
+function checkIncognitoAccess() {
+  return new Promise((resolve) => {
+    if (typeof chrome !== 'undefined' && chrome.extension && chrome.extension.isAllowedIncognitoAccess) {
+      chrome.extension.isAllowedIncognitoAccess((isAllowed) => {
+        resolve(Boolean(isAllowed));
+      });
+    } else {
+      resolve(true);
+    }
+  });
+}
+
 function startHeartbeatLoop() {
   if (heartbeatInterval) clearInterval(heartbeatInterval);
   heartbeatInterval = setInterval(async () => {
     if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
       const devId = await getOrCreateDeviceId();
+      const incognitoAllowed = await checkIncognitoAccess();
       wsConnection.send(JSON.stringify({
         type: 'HEARTBEAT',
         deviceId: devId,
         platform: 'WEB_EXTENSION',
+        incognitoAllowed: incognitoAllowed,
         timestamp: Date.now()
       }));
     }
@@ -787,6 +801,26 @@ if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage)
         }
       })();
       return true;
+    }
+  });
+}
+
+// Incognito Compliance Enforcement
+if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.onCreated) {
+  chrome.tabs.onCreated.addListener(async (tab) => {
+    if (tab.incognito) {
+      const allowed = await checkIncognitoAccess();
+      if (!allowed) {
+        console.warn('[FocusGuard Security] Incognito tab opened without extension access. Prompting compliance.');
+        if (chrome.notifications) {
+          chrome.notifications.create({
+            type: 'basic',
+            iconUrl: '../icons/icon128.png',
+            title: 'FocusGuard Security Alert',
+            message: 'Incognito protection requires "Allow in Incognito" access in chrome://extensions.'
+          });
+        }
+      }
     }
   });
 }

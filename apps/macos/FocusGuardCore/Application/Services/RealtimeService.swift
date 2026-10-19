@@ -14,6 +14,10 @@ public protocol RealtimeServiceProtocol: AnyObject, Sendable {
     var onFocusChanged: (@Sendable (Bool, Int, [String]) -> Void)? { get set }
     var onPolicyUpdated: (@Sendable () -> Void)? { get set }
     var onLockdownChanged: (@Sendable (Bool, String) -> Void)? { get set }
+    var onExtensionGraceTick: (@Sendable (String, Int, String) -> Void)? { get set }
+    var onExtensionRestored: (@Sendable () -> Void)? { get set }
+    var onBrowserTerminated: (@Sendable (String, String) -> Void)? { get set }
+    var onWebsiteUsageUpdated: (@Sendable () -> Void)? { get set }
     func connect()
     func disconnect()
     func sendHeartbeat()
@@ -36,6 +40,10 @@ public final class RealtimeService: RealtimeServiceProtocol, @unchecked Sendable
     public var onFocusChanged: (@Sendable (Bool, Int, [String]) -> Void)?
     public var onPolicyUpdated: (@Sendable () -> Void)?
     public var onLockdownChanged: (@Sendable (Bool, String) -> Void)?
+    public var onExtensionGraceTick: (@Sendable (String, Int, String) -> Void)?
+    public var onExtensionRestored: (@Sendable () -> Void)?
+    public var onBrowserTerminated: (@Sendable (String, String) -> Void)?
+    public var onWebsiteUsageUpdated: (@Sendable () -> Void)?
 
     public var connectionState: RealtimeConnectionState {
         lock.lock()
@@ -208,7 +216,29 @@ public final class RealtimeService: RealtimeServiceProtocol, @unchecked Sendable
                 onLockdownChanged?(isLockdown, commandType)
             }
 
+        case "EXTENSION_GRACE_TICK":
+            let payload = json["payload"] as? [String: Any] ?? json
+            let browser = payload["browserName"] as? String ?? "Browser"
+            let remaining = payload["remainingSeconds"] as? Int ?? 60
+            let warning = payload["warning"] as? String ?? "FocusGuard extension missing!"
+            onExtensionGraceTick?(browser, remaining, warning)
+
+        case "EXTENSION_RESTORED", "HEARTBEAT":
+            onExtensionRestored?()
+
+        case "BROWSER_TERMINATED":
+            let payload = json["payload"] as? [String: Any] ?? json
+            let browser = payload["browserName"] as? String ?? "Browser"
+            let reason = payload["reason"] as? String ?? "Extension deleted or disabled."
+            onBrowserTerminated?(browser, reason)
+
+        case "WEBSITE_USAGE_TICK", "USAGE_SYNCED":
+            onWebsiteUsageUpdated?()
+
         default:
+            if let platform = json["platform"] as? String, platform == "WEB_EXTENSION" {
+                onExtensionRestored?()
+            }
             break
         }
     }
@@ -275,6 +305,10 @@ public final class MockRealtimeService: RealtimeServiceProtocol, @unchecked Send
     public var onFocusChanged: (@Sendable (Bool, Int, [String]) -> Void)?
     public var onPolicyUpdated: (@Sendable () -> Void)?
     public var onLockdownChanged: (@Sendable (Bool, String) -> Void)?
+    public var onExtensionGraceTick: (@Sendable (String, Int, String) -> Void)?
+    public var onExtensionRestored: (@Sendable () -> Void)?
+    public var onBrowserTerminated: (@Sendable (String, String) -> Void)?
+    public var onWebsiteUsageUpdated: (@Sendable () -> Void)?
 
     public var connectionState: RealtimeConnectionState {
         lock.lock()

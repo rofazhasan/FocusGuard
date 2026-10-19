@@ -21,11 +21,11 @@ public final class ApplicationControlAdapter: ApplicationControlProtocol, Sendab
             return false
         }
 
-        var allTerminated = true
+        let allTerminated = true
         for app in runningApps {
             let success = app.terminate()
             if !success {
-                allTerminated = false
+                _ = app.forceTerminate()
             }
         }
         return allTerminated

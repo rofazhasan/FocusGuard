@@ -3,6 +3,7 @@
   "name": "FocusGuard — Attention Enforcement Engine",
   "version": "1.0.0",
   "description": "Production cross-platform attention management and policy enforcement extension.",
+  "incognito": "spanning",
   "permissions": [
     "declarativeNetRequest",
     "declarativeNetRequestWithHostAccess",

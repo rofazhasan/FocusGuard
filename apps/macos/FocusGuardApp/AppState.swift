@@ -105,6 +105,50 @@ public final class AppState: ObservableObject {
         }.sorted { $0.totalMinutes > $1.totalMinutes }
     }
 
+    // Fleet Multi-Device Model
+    public struct FleetDevice: Identifiable, Codable, Sendable {
+        public let id: String
+        public let name: String
+        public let platform: String
+        public let clientType: String
+        public let status: String
+        public let protectionState: String?
+        public let lastHeartbeat: String?
+
+        public var isLocked: Bool {
+            status == "LOCKED" || protectionState == "LOCKED"
+        }
+
+        public var platformIcon: String {
+            switch platform.uppercased() {
+            case "ANDROID": return "phone.fill"
+            case "MACOS": return "applelogo"
+            case "WINDOWS": return "pc"
+            case "WEB_EXTENSION", "BROWSER_EXTENSION": return "puzzlepiece.extension.fill"
+            default: return "laptopcomputer"
+            }
+        }
+    }
+
+    @Published public var fleetDevices: [FleetDevice] = []
+
+    // Extension Anti-Tampering & 60s Watchdog
+    public static let supportedBrowsers: [(name: String, bundleId: String)] = [
+        ("Google Chrome", "com.google.Chrome"),
+        ("Brave Browser", "com.brave.Browser"),
+        ("Microsoft Edge", "com.microsoft.edgemac"),
+        ("Arc", "company.thebrowser.Browser"),
+        ("Chromium", "org.chromium.Chromium")
+    ]
+
+    @Published public var extensionTamperDetected: Bool = false
+    @Published public var extensionGraceRemainingSeconds: Int = 60
+    @Published public var tamperBrowserName: String = ""
+    @Published public var tamperBrowserBundleId: String = ""
+    @Published public var isIncognitoCompliant: Bool = true
+    @Published public var isLiveStreaming: Bool = true
+    public var lastExtensionHeartbeatTime: Date = Date()
+
     // Interactive Focus Session Control
     @Published public var selectedFocusPresetMinutes: Int = 45
 
@@ -200,6 +244,43 @@ public final class AppState: ObservableObject {
                 } else {
                     self.statusMessage = "🔓 Protection Resumed: Applications unlocked by administrator"
                 }
+            }
+        }
+
+        container.realtimeService.onExtensionGraceTick = { [weak self] browser, remaining, warning in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                self.extensionTamperDetected = true
+                self.tamperBrowserName = browser
+                self.extensionGraceRemainingSeconds = remaining
+                self.statusMessage = warning
+            }
+        }
+
+        container.realtimeService.onExtensionRestored = { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                self.lastExtensionHeartbeatTime = Date()
+                if self.extensionTamperDetected {
+                    self.extensionTamperDetected = false
+                    self.extensionGraceRemainingSeconds = 60
+                    self.statusMessage = "✅ FocusGuard Extension verified. Normal browsing active."
+                }
+            }
+        }
+
+        container.realtimeService.onBrowserTerminated = { [weak self] browser, reason in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                self.extensionTamperDetected = false
+                self.extensionGraceRemainingSeconds = 60
+                self.statusMessage = "🛑 \(browser) force-closed: \(reason)"
+            }
+        }
+
+        container.realtimeService.onWebsiteUsageUpdated = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.fetchWebsiteAnalytics()
             }
         }
     }
@@ -374,9 +455,62 @@ public final class AppState: ObservableObject {
                         self.statusMessage = "Focus Mode Ended • Normal Browsing Restored"
                     }
                 }
+
+                // Extension Anti-Tamper & 60-Second Watchdog
+                let runningBrowsers = AppState.supportedBrowsers.filter { b in
+                    !NSRunningApplication.runningApplications(withBundleIdentifier: b.bundleId).isEmpty
+                }
+
+                if let activeBrowser = runningBrowsers.first {
+                    // Supported browser is running! Check extension heartbeat
+                    let secondsSinceHeartbeat = Date().timeIntervalSince(self.lastExtensionHeartbeatTime)
+                    if secondsSinceHeartbeat > 20.0 {
+                        // Extension missing or deleted
+                        if !self.extensionTamperDetected {
+                            self.extensionTamperDetected = true
+                            self.extensionGraceRemainingSeconds = 60
+                            self.tamperBrowserName = activeBrowser.name
+                            self.tamperBrowserBundleId = activeBrowser.bundleId
+                            self.statusMessage = "⚠️ EXTENSION MISSING: \(activeBrowser.name) will force-quit in 60s if not restored."
+                            if self.soundAlertsEnabled {
+                                NSSound.beep()
+                            }
+                        } else {
+                            if self.extensionGraceRemainingSeconds > 0 {
+                                self.extensionGraceRemainingSeconds -= 1
+                            }
+                            if self.extensionGraceRemainingSeconds <= 0 {
+                                // 1 Minute Grace Period Expired: Force close the browser!
+                                self.container.applicationControl.terminateApplication(bundleIdentifier: activeBrowser.bundleId)
+                                self.statusMessage = "🛑 \(activeBrowser.name) force-closed: Extension was deleted or disabled after 60s."
+                                self.extensionTamperDetected = false
+                                self.extensionGraceRemainingSeconds = 60
+                            }
+                        }
+                    } else {
+                        // Extension heartbeat is healthy
+                        if self.extensionTamperDetected {
+                            self.extensionTamperDetected = false
+                            self.extensionGraceRemainingSeconds = 60
+                            self.statusMessage = "✅ FocusGuard Extension verified. Protection active."
+                        }
+                    }
+                } else {
+                    // No browser running
+                    if self.extensionTamperDetected {
+                        self.extensionTamperDetected = false
+                        self.extensionGraceRemainingSeconds = 60
+                    }
+                }
+
                 self.trackingTickCount += 1
                 if self.trackingTickCount % 3 == 0 {
                     self.fetchWebsiteAnalytics()
+                }
+                if self.trackingTickCount % 5 == 0 {
+                    Task { [weak self] in
+                        await self?.fetchFleetDevices()
+                    }
                 }
                 self.refreshState()
             }
@@ -631,12 +765,96 @@ public final class AppState: ObservableObject {
     }
 
     public func deletePolicy(id: UUID) {
+        if let policy = activePolicies.first(where: { $0.id == id }) {
+            // Anti-Tampering: Active policies cannot be deleted while enforcement is active
+            if isFocusActive || isEmergencyLocked || policy.limitSeconds > 0 {
+                self.statusMessage = "🔒 Protected Policy: Active policy '\(policy.name)' cannot be deleted while enforcement is active."
+                return
+            }
+        }
+
         do {
             try container.policyService.deletePolicy(id: id)
             refreshState()
             self.statusMessage = "Policy deleted."
         } catch {
             self.statusMessage = "Delete error: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - Central Fleet Management & Remote Blocking
+    public func fetchFleetDevices() async {
+        guard let token = (try? container.deviceService.getDeviceToken()) ?? cachedUserToken else { return }
+        guard let url = URL(string: "\(serverBaseUrl)/api/v1/devices") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        do {
+            let (data, res) = try await URLSession.shared.data(for: req)
+            guard let http = res as? HTTPURLResponse, http.statusCode == 200 else { return }
+            struct FleetResp: Codable {
+                let devices: [FleetDevice]
+            }
+            if let decoded = try? JSONDecoder().decode(FleetResp.self, from: data) {
+                await MainActor.run {
+                    self.fleetDevices = decoded.devices
+                }
+            } else if let arr = try? JSONDecoder().decode([FleetDevice].self, from: data) {
+                await MainActor.run {
+                    self.fleetDevices = arr
+                }
+            }
+        } catch {}
+    }
+
+    public func blockDevice(id: String) async {
+        await dispatchFleetCommand(deviceId: id, commandType: "STOP_APP", reason: "Blocked by Central Admin from macOS")
+    }
+
+    public func unblockDevice(id: String) async {
+        await dispatchFleetCommand(deviceId: id, commandType: "RESUME_APP", reason: "Resumed by Central Admin from macOS")
+    }
+
+    public func emergencyStopAllFleet() async {
+        await dispatchFleetCommand(deviceId: "ALL", commandType: "STOP_APP", reason: "Emergency Block Entire Fleet triggered by Admin")
+    }
+
+    private func dispatchFleetCommand(deviceId: String, commandType: String, reason: String) async {
+        guard let token = (try? container.deviceService.getDeviceToken()) ?? cachedUserToken else {
+            self.statusMessage = "Command failed: Authentication token missing"
+            return
+        }
+        guard let url = URL(string: "\(serverBaseUrl)/api/v1/commands/dispatch") else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        let payload: [String: Any] = [
+            "deviceId": deviceId,
+            "commandType": commandType,
+            "reason": reason,
+            "payload": ["source": "macOS Central Admin", "timestamp": Date().timeIntervalSince1970]
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+        do {
+            let (_, res) = try await URLSession.shared.data(for: req)
+            if let http = res as? HTTPURLResponse, http.statusCode == 200 || http.statusCode == 201 {
+                await MainActor.run {
+                    if commandType == "STOP_APP" || commandType == "LOCKDOWN_DEVICE" {
+                        self.statusMessage = "🚨 Admin Lockdown Dispatched: Device(s) blocked immediately."
+                    } else {
+                        self.statusMessage = "✅ Admin Resume Dispatched: Device(s) unblocked."
+                    }
+                }
+                await fetchFleetDevices()
+            } else {
+                await MainActor.run { self.statusMessage = "Failed to dispatch command to device." }
+            }
+        } catch {
+            await MainActor.run { self.statusMessage = "Network error: \(error.localizedDescription)" }
         }
     }
 

@@ -31,6 +31,30 @@ public struct MenuBarView: View {
 
             Divider()
 
+            if appState.extensionTamperDetected {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.red)
+                        Text("EXTENSION MISSING")
+                            .font(.system(size: 11, weight: .heavy))
+                            .foregroundColor(.red)
+                        Spacer()
+                        Text("\(appState.extensionGraceRemainingSeconds)s")
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundColor(.red)
+                    }
+                    Text("\(appState.tamperBrowserName) will force-quit in \(appState.extensionGraceRemainingSeconds)s if extension is not enabled.")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+                .padding(8)
+                .background(Color.red.opacity(0.12))
+                .cornerRadius(6)
+
+                Divider()
+            }
+
             // Focus Lockdown Quick Action Section
             if appState.isFocusActive {
                 VStack(alignment: .leading, spacing: 6) {

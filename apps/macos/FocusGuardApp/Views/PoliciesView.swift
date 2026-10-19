@@ -145,11 +145,27 @@ public struct PoliciesView: View {
 
                                     Spacer()
 
-                                    Button(action: { appState.deletePolicy(id: policy.id) }) {
-                                        Image(systemName: "trash")
-                                            .foregroundColor(.red)
+                                    if policy.limitSeconds > 0 || appState.isFocusActive || appState.isEmergencyLocked {
+                                        HStack(spacing: 5) {
+                                            Image(systemName: "lock.shield.fill")
+                                                .foregroundColor(.orange)
+                                                .font(.system(size: 11))
+                                            Text("ACTIVE & LOCKED")
+                                                .font(.system(size: 9, weight: .heavy))
+                                                .foregroundColor(.orange)
+                                        }
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.orange.opacity(0.12))
+                                        .cornerRadius(6)
+                                        .help("Active policies cannot be deleted locally to ensure tamper-proof enforcement.")
+                                    } else {
+                                        Button(action: { appState.deletePolicy(id: policy.id) }) {
+                                            Image(systemName: "trash")
+                                                .foregroundColor(.red)
+                                        }
+                                        .buttonStyle(.plain)
                                     }
-                                    .buttonStyle(.plain)
                                 }
                                 .padding(12)
                                 .background(Color(nsColor: .controlBackgroundColor))
